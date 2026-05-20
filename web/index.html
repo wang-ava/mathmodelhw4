@@ -1,0 +1,2699 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Poisson 图像融合交互工具</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/face-api.min.js"></script>
+  <style>
+    :root {
+      --page-pad: clamp(16px, 2.2vw, 40px);
+      --bg: #f5f7fa;
+      --surface: #ffffff;
+      --surface-soft: #eef2f6;
+      --surface-strong: #e6ebf1;
+      --ink: #12151a;
+      --muted: #606b78;
+      --muted-strong: #3d4652;
+      --line: #dbe2ea;
+      --line-strong: #c9d3df;
+      --accent: #0f8b7e;
+      --accent-strong: #0b6f65;
+      --accent-soft: #e4f4f1;
+      --coral: #d75f49;
+      --amber: #b68218;
+      --blue: #2f73d6;
+      --violet: #725bd6;
+      --shadow: 0 18px 45px rgba(31, 42, 55, 0.08);
+      --shadow-soft: 0 10px 24px rgba(31, 42, 55, 0.06);
+      --radius: 8px;
+    }
+
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    html {
+      background: var(--bg);
+    }
+
+    body {
+      min-height: 100vh;
+      color: var(--ink);
+      background:
+        linear-gradient(90deg, rgba(18, 21, 26, 0.035) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(18, 21, 26, 0.035) 1px, transparent 1px),
+        var(--bg);
+      background-size: 32px 32px;
+      font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }
+
+    button,
+    input,
+    select {
+      font: inherit;
+    }
+
+    button:focus-visible,
+    input:focus-visible,
+    select:focus-visible {
+      outline: 3px solid rgba(47, 115, 214, 0.24);
+      outline-offset: 2px;
+    }
+
+    .nav {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      padding: 0 var(--page-pad);
+      background: rgba(255, 255, 255, 0.92);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(18px);
+    }
+
+    .nav-inner {
+      width: 100%;
+      max-width: 1920px;
+      height: 64px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+    }
+
+    .nav-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: var(--ink);
+      text-decoration: none;
+      font-size: 1rem;
+      font-weight: 800;
+      letter-spacing: 0;
+      white-space: nowrap;
+    }
+
+    .nav-logo {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      color: #fff;
+      background: var(--ink);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: var(--radius);
+      font-size: 0.95rem;
+      font-weight: 800;
+      box-shadow: inset 0 -10px 18px rgba(255, 255, 255, 0.08);
+    }
+
+    .nav-tabs {
+      display: flex;
+      gap: 6px;
+      padding: 4px;
+      background: var(--surface-soft);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+    }
+
+    .nav-tab {
+      min-height: 34px;
+      padding: 0 16px;
+      color: var(--muted);
+      background: transparent;
+      border: 0;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.88rem;
+      font-weight: 700;
+      transition: background 0.18s, color 0.18s, box-shadow 0.18s;
+    }
+
+    .nav-tab:hover {
+      color: var(--ink);
+      background: rgba(255, 255, 255, 0.62);
+    }
+
+    .nav-tab.active {
+      color: var(--accent-strong);
+      background: var(--surface);
+      box-shadow: var(--shadow-soft);
+    }
+
+    .hero {
+      width: 100%;
+      max-width: 1920px;
+      margin: 0 auto;
+      padding: 24px var(--page-pad) 12px;
+      text-align: left;
+    }
+
+    .hero h1 {
+      font-size: clamp(2rem, 3vw, 3.05rem);
+      line-height: 1.05;
+      font-weight: 800;
+      letter-spacing: 0;
+    }
+
+    .hero h1 span {
+      color: var(--accent-strong);
+    }
+
+    .hero p {
+      max-width: 760px;
+      margin-top: 10px;
+      color: var(--muted);
+      font-size: 1rem;
+      font-weight: 500;
+      overflow-wrap: anywhere;
+    }
+
+    .stats {
+      width: 100%;
+      max-width: 1920px;
+      margin: 0 auto;
+      padding: 0 var(--page-pad) 16px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .guide-section {
+      width: 100%;
+      max-width: 1920px;
+      margin: 0 auto;
+      padding: 0 var(--page-pad) 18px;
+    }
+
+    .guide-panel {
+      display: grid;
+      grid-template-columns: minmax(250px, 0.72fr) minmax(420px, 1.18fr) minmax(280px, 0.75fr);
+      gap: 18px;
+      align-items: stretch;
+      padding: 16px;
+      background: rgba(255, 255, 255, 0.88);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-soft);
+    }
+
+    .guide-copy,
+    .mode-help {
+      min-width: 0;
+    }
+
+    .guide-eyebrow,
+    .mode-help-kicker {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 0 9px;
+      color: var(--accent-strong);
+      background: var(--accent-soft);
+      border: 1px solid rgba(15, 139, 126, 0.2);
+      border-radius: 999px;
+      font-size: 0.72rem;
+      font-weight: 800;
+    }
+
+    .guide-copy h2,
+    .mode-help h3 {
+      margin-top: 10px;
+      font-size: 1.1rem;
+      line-height: 1.25;
+      font-weight: 800;
+      letter-spacing: 0;
+    }
+
+    .guide-copy p,
+    .mode-help p {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 0.88rem;
+      font-weight: 600;
+      line-height: 1.65;
+    }
+
+    .guide-steps {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      list-style: none;
+      counter-reset: guide;
+    }
+
+    .guide-steps li {
+      min-width: 0;
+      padding: 12px;
+      background: #f8fafc;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      counter-increment: guide;
+    }
+
+    .guide-steps li::before {
+      content: counter(guide);
+      width: 24px;
+      height: 24px;
+      display: grid;
+      place-items: center;
+      margin-bottom: 9px;
+      color: #fff;
+      background: var(--ink);
+      border-radius: 6px;
+      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.75rem;
+      font-weight: 800;
+    }
+
+    .guide-steps strong {
+      display: block;
+      color: var(--ink);
+      font-size: 0.84rem;
+      line-height: 1.35;
+      font-weight: 800;
+    }
+
+    .guide-steps span {
+      display: block;
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 0.76rem;
+      line-height: 1.55;
+      font-weight: 650;
+    }
+
+    .mode-help {
+      padding: 13px;
+      background: #f8fafc;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+    }
+
+    .mode-help ul {
+      display: grid;
+      gap: 6px;
+      margin-top: 10px;
+      padding-left: 18px;
+      color: var(--muted-strong);
+      font-size: 0.8rem;
+      font-weight: 650;
+      line-height: 1.55;
+    }
+
+    .stat {
+      min-width: 150px;
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      padding: 10px 13px;
+      background: rgba(255, 255, 255, 0.72);
+      border: 1px solid var(--line);
+      border-left: 4px solid var(--accent);
+      border-radius: var(--radius);
+      box-shadow: 0 6px 18px rgba(31, 42, 55, 0.04);
+    }
+
+    .stat:nth-child(2) {
+      border-left-color: var(--blue);
+    }
+
+    .stat:nth-child(3) {
+      border-left-color: var(--coral);
+    }
+
+    .stat-value {
+      color: var(--ink);
+      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 1.28rem;
+      font-weight: 800;
+      letter-spacing: 0;
+      white-space: nowrap;
+    }
+
+    .stat-label {
+      color: var(--muted);
+      font-size: 0.78rem;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .section {
+      width: 100%;
+      max-width: 1920px;
+      margin: 0 auto;
+      padding: 0 var(--page-pad) 46px;
+    }
+
+    .section-title {
+      margin: 38px 0 16px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--ink);
+      font-size: 1.15rem;
+      font-weight: 800;
+      letter-spacing: 0;
+    }
+
+    .section-title::before {
+      content: "";
+      width: 10px;
+      height: 10px;
+      background: var(--accent);
+      border-radius: 50%;
+      box-shadow: 18px 0 0 var(--coral), 36px 0 0 var(--blue);
+      margin-right: 34px;
+      flex: 0 0 auto;
+    }
+
+    .tool-grid {
+      display: grid;
+      grid-template-columns: minmax(340px, 0.88fr) minmax(600px, 1.48fr) minmax(320px, 0.78fr);
+      gap: 18px;
+      align-items: start;
+    }
+
+    .tool-grid > *,
+    .controls-panel,
+    .panel,
+    .canvas-wrap {
+      min-width: 0;
+    }
+
+    .panel {
+      background: rgba(255, 255, 255, 0.95);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 14px;
+      box-shadow: var(--shadow);
+    }
+
+    .panel-header {
+      min-height: 34px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .panel-title {
+      color: var(--ink);
+      font-size: 0.96rem;
+      font-weight: 800;
+      letter-spacing: 0;
+      overflow-wrap: anywhere;
+    }
+
+    .panel-badge {
+      max-width: 52%;
+      padding: 4px 9px;
+      color: var(--muted-strong);
+      background: var(--surface-soft);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.72rem;
+      font-weight: 700;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .canvas-wrap {
+      min-height: clamp(300px, 34vh, 560px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      overflow: hidden;
+      background-color: #f8fafc;
+      background-image:
+        linear-gradient(45deg, rgba(17, 24, 39, 0.045) 25%, transparent 25%),
+        linear-gradient(-45deg, rgba(17, 24, 39, 0.045) 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, rgba(17, 24, 39, 0.045) 75%),
+        linear-gradient(-45deg, transparent 75%, rgba(17, 24, 39, 0.045) 75%);
+      background-size: 18px 18px;
+      background-position: 0 0, 0 9px, 9px -9px, -9px 0;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+    }
+
+    .canvas-wrap canvas {
+      width: 100%;
+      height: auto;
+      max-width: 100%;
+      display: block;
+      position: relative;
+      z-index: 1;
+      border-radius: 4px;
+      box-shadow: 0 18px 36px rgba(31, 42, 55, 0.16);
+    }
+
+    #resultCanvas {
+      cursor: crosshair;
+    }
+
+    #resultCanvas,
+    #sourceCanvas {
+      max-height: min(68vh, 780px);
+      object-fit: contain;
+    }
+
+    #resultCanvas.dragging {
+      cursor: grabbing;
+    }
+
+    .compare-strip {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .compare-strip figure {
+      min-width: 0;
+      margin: 0;
+    }
+
+    .compare-strip figcaption {
+      margin-bottom: 5px;
+      color: var(--muted-strong);
+      font-size: 0.74rem;
+      font-weight: 700;
+    }
+
+    .compare-strip canvas {
+      width: 100%;
+      display: block;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      box-shadow: 0 8px 20px rgba(31, 42, 55, 0.08);
+    }
+
+    .controls-panel {
+      position: sticky;
+      top: 82px;
+    }
+
+    .control-group {
+      margin-bottom: 15px;
+    }
+
+    .control-label {
+      display: block;
+      margin-bottom: 7px;
+      color: var(--muted-strong);
+      font-size: 0.76rem;
+      font-weight: 800;
+      letter-spacing: 0;
+    }
+
+    select {
+      width: 100%;
+      min-height: 40px;
+      padding: 0 12px;
+      color: var(--ink);
+      background: #fbfcfe;
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      cursor: pointer;
+      font-size: 0.88rem;
+      font-weight: 650;
+      transition: border-color 0.16s, box-shadow 0.16s, background 0.16s;
+    }
+
+    select:hover {
+      background: var(--surface);
+      border-color: var(--accent);
+    }
+
+    .segmented {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4px;
+      padding: 4px;
+      background: var(--surface-soft);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+    }
+
+    .segmented button {
+      min-height: 35px;
+      color: var(--muted);
+      background: transparent;
+      border: 0;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.84rem;
+      font-weight: 800;
+      transition: background 0.16s, color 0.16s, box-shadow 0.16s;
+    }
+
+    .segmented button.active {
+      color: #fff;
+      background: var(--accent);
+      box-shadow: 0 10px 22px rgba(15, 139, 126, 0.26);
+    }
+
+    .segmented button:hover:not(.active) {
+      color: var(--ink);
+      background: rgba(255, 255, 255, 0.66);
+    }
+
+    .range-wrap {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 46px;
+      align-items: center;
+      gap: 11px;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      height: 6px;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+
+    .range-value {
+      color: var(--accent-strong);
+      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.82rem;
+      font-weight: 800;
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    .btn-row {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .btn {
+      min-height: 40px;
+      padding: 0 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      color: var(--ink);
+      background: #fbfcfe;
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      cursor: pointer;
+      font-size: 0.84rem;
+      font-weight: 800;
+      text-align: center;
+      transition: transform 0.16s, background 0.16s, border-color 0.16s, color 0.16s, box-shadow 0.16s;
+    }
+
+    .btn:hover {
+      color: var(--accent-strong);
+      background: var(--accent-soft);
+      border-color: rgba(15, 139, 126, 0.5);
+      box-shadow: 0 8px 18px rgba(31, 42, 55, 0.08);
+      transform: translateY(-1px);
+    }
+
+    .btn.primary {
+      color: #fff;
+      background: var(--ink);
+      border-color: var(--ink);
+    }
+
+    .btn.primary:hover {
+      color: #fff;
+      background: var(--accent-strong);
+      border-color: var(--accent-strong);
+    }
+
+    #recordBtn.recording {
+      color: #fff;
+      background: var(--coral);
+      border-color: var(--coral);
+    }
+
+    .toggle-row {
+      min-height: 34px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .toggle {
+      width: 44px;
+      height: 24px;
+      flex: 0 0 auto;
+      position: relative;
+      background: var(--surface-strong);
+      border: 1px solid var(--line-strong);
+      border-radius: 999px;
+      cursor: pointer;
+      transition: background 0.18s, border-color 0.18s;
+    }
+
+    .toggle input {
+      display: none;
+    }
+
+    .toggle input:checked + .toggle-slider {
+      transform: translateX(20px);
+    }
+
+    .toggle:has(input:checked) {
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+
+    .toggle-slider {
+      position: absolute;
+      top: 1px;
+      left: 1px;
+      width: 20px;
+      height: 20px;
+      background: #fff;
+      border-radius: 50%;
+      box-shadow: 0 2px 6px rgba(31, 42, 55, 0.2);
+      transition: transform 0.18s;
+    }
+
+    .toggle-label {
+      color: var(--muted-strong);
+      font-size: 0.86rem;
+      font-weight: 650;
+      overflow-wrap: anywhere;
+    }
+
+    .readout {
+      margin-top: 15px;
+      padding: 13px;
+      background: #f8fafc;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+    }
+
+    .readout-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 11px 12px;
+    }
+
+    .readout-item {
+      min-width: 0;
+    }
+
+    .readout-item dt {
+      color: var(--muted);
+      font-size: 0.68rem;
+      font-weight: 800;
+      letter-spacing: 0;
+    }
+
+    .readout-item dd {
+      margin-top: 3px;
+      color: var(--ink);
+      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.76rem;
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+
+    .analysis-section {
+      margin-top: 10px;
+      padding: 0;
+      background: transparent;
+      border: 0;
+      box-shadow: none;
+    }
+
+    .chart-container,
+    .flow-diagram,
+    .case-card,
+    .limit-card {
+      background: rgba(255, 255, 255, 0.95);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-soft);
+    }
+
+    .chart-container {
+      padding: 18px;
+      margin-bottom: 28px;
+    }
+
+    .chart-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+
+    .chart-title {
+      font-weight: 800;
+    }
+
+    .chart-legend {
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+
+    .legend-item {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      color: var(--muted-strong);
+      font-size: 0.82rem;
+      font-weight: 700;
+    }
+
+    .legend-dot {
+      width: 11px;
+      height: 11px;
+      border-radius: 3px;
+    }
+
+    .chart-wrap {
+      height: 310px;
+    }
+
+    .case-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+      margin-top: 16px;
+    }
+
+    .case-card {
+      padding: 18px;
+      transition: border-color 0.16s, transform 0.16s, box-shadow 0.16s;
+    }
+
+    .case-card:hover {
+      border-color: rgba(15, 139, 126, 0.5);
+      transform: translateY(-2px);
+      box-shadow: var(--shadow);
+    }
+
+    .case-header {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+      margin-bottom: 14px;
+    }
+
+    .case-icon {
+      width: 38px;
+      height: 38px;
+      display: grid;
+      place-items: center;
+      background: var(--surface-soft);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      font-size: 1.15rem;
+    }
+
+    .case-name {
+      font-weight: 800;
+    }
+
+    .case-desc,
+    .case-analysis,
+    .limit-card p {
+      color: var(--muted);
+      font-size: 0.84rem;
+      line-height: 1.65;
+    }
+
+    .case-metrics {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .case-metric {
+      min-width: 0;
+      padding: 10px 8px;
+      text-align: center;
+      background: #f8fafc;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+    }
+
+    .case-metric-value {
+      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 1rem;
+      font-weight: 800;
+      overflow-wrap: anywhere;
+    }
+
+    .case-metric-value.good {
+      color: var(--accent-strong);
+    }
+
+    .case-metric-value.bad {
+      color: var(--coral);
+    }
+
+    .case-metric-label {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 0.68rem;
+      font-weight: 700;
+    }
+
+    .limit-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+      margin-top: 16px;
+    }
+
+    .limit-card {
+      padding: 18px;
+    }
+
+    .limit-icon {
+      margin-bottom: 9px;
+      font-size: 1.35rem;
+    }
+
+    .limit-card h3 {
+      margin-bottom: 7px;
+      font-size: 0.98rem;
+      font-weight: 800;
+    }
+
+    .flow-diagram {
+      display: flex;
+      align-items: stretch;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 16px;
+      padding: 14px;
+    }
+
+    .flow-step {
+      min-width: 136px;
+      flex: 1 1 136px;
+      padding: 14px 12px;
+      text-align: center;
+      background: #f8fafc;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+    }
+
+    .flow-num {
+      width: 24px;
+      height: 24px;
+      display: grid;
+      place-items: center;
+      margin: 0 auto 8px;
+      color: #fff;
+      background: var(--ink);
+      border-radius: 6px;
+      font-size: 0.75rem;
+      font-weight: 800;
+    }
+
+    .flow-title {
+      font-size: 0.88rem;
+      font-weight: 800;
+    }
+
+    .flow-desc {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 0.72rem;
+      font-weight: 650;
+    }
+
+    .flow-arrow {
+      align-self: center;
+      color: var(--muted);
+      font-size: 1rem;
+    }
+
+    .footer {
+      margin-top: 20px;
+      padding: 28px 32px 34px;
+      color: var(--muted);
+      border-top: 1px solid var(--line);
+      text-align: center;
+      font-size: 0.8rem;
+      font-weight: 650;
+    }
+
+    @media (max-width: 1420px) {
+      .tool-grid {
+        grid-template-columns: minmax(280px, 0.9fr) minmax(460px, 1.1fr);
+      }
+
+      .guide-panel {
+        grid-template-columns: 1fr;
+      }
+
+      .controls-panel {
+        grid-column: 1 / -1;
+        position: static;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+      }
+
+      .controls-panel .panel-header,
+      .controls-panel .readout {
+        grid-column: 1 / -1;
+      }
+
+      .controls-panel .control-group {
+        margin-bottom: 0;
+      }
+    }
+
+    @media (max-width: 860px) {
+      .nav {
+        padding: 0 var(--page-pad);
+      }
+
+      .nav-inner {
+        height: auto;
+        padding: 12px 0;
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .nav-tabs {
+        width: 100%;
+      }
+
+      .nav-tab {
+        flex: 1;
+      }
+
+      .hero {
+        padding: 24px var(--page-pad) 12px;
+      }
+
+      .guide-panel {
+        padding: 14px;
+      }
+
+      .tool-grid,
+      .controls-panel,
+      .case-grid,
+      .limit-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .compare-strip {
+        grid-template-columns: 1fr;
+      }
+
+      .guide-steps {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .chart-header {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .flow-diagram {
+        flex-direction: column;
+      }
+
+      .flow-arrow {
+        display: none;
+      }
+    }
+
+    @media (max-width: 520px) {
+      .hero h1 {
+        font-size: 2rem;
+      }
+
+      .stat {
+        width: 100%;
+      }
+
+      .btn-row,
+      .readout-grid,
+      .case-metrics,
+      .guide-steps {
+        grid-template-columns: 1fr;
+      }
+
+      .panel {
+        padding: 12px;
+      }
+    }
+
+    /* Edition-style visual refresh */
+    :root {
+      --page-pad: clamp(18px, 3vw, 56px);
+      --bg: #f4f7f2;
+      --surface: #ffffff;
+      --surface-soft: #eef3ed;
+      --surface-strong: #dfe8dd;
+      --ink: #10150f;
+      --muted: #637061;
+      --muted-strong: #394237;
+      --line: rgba(16, 21, 15, 0.13);
+      --line-strong: rgba(16, 21, 15, 0.24);
+      --accent: #00a66d;
+      --accent-strong: #047a54;
+      --accent-soft: #dff7ec;
+      --coral: #ff6f59;
+      --amber: #c39116;
+      --blue: #2878ff;
+      --violet: #6951d8;
+      --shadow: 0 24px 70px rgba(16, 21, 15, 0.14);
+      --shadow-soft: 0 14px 36px rgba(16, 21, 15, 0.09);
+      --radius: 8px;
+      --hero-progress: 0;
+      --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    html {
+      scroll-behavior: smooth;
+      background: var(--bg);
+    }
+
+    body {
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 22% 10%, rgba(0, 166, 109, 0.14), transparent 24vw),
+        radial-gradient(circle at 82% 4%, rgba(255, 111, 89, 0.12), transparent 22vw),
+        linear-gradient(90deg, rgba(16, 21, 15, 0.04) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(16, 21, 15, 0.04) 1px, transparent 1px),
+        var(--bg);
+      background-size: auto, auto, 34px 34px, 34px 34px, auto;
+      font-family: Inter, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      overflow-x: hidden;
+    }
+
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      pointer-events: none;
+      background:
+        linear-gradient(120deg, transparent 0 35%, rgba(255, 255, 255, 0.72) 46%, transparent 58%),
+        linear-gradient(180deg, rgba(255, 255, 255, 0.4), transparent 44%);
+      opacity: calc(0.82 - var(--hero-progress) * 0.36);
+      transform: translateY(calc(var(--hero-progress) * -70px));
+      transition: opacity 0.2s linear;
+    }
+
+    .nav {
+      background: rgba(244, 247, 242, 0.76);
+      border-bottom: 1px solid rgba(16, 21, 15, 0.08);
+      transition: background 0.24s, box-shadow 0.24s, border-color 0.24s;
+    }
+
+    .is-scrolled .nav {
+      background: rgba(255, 255, 255, 0.88);
+      border-color: rgba(16, 21, 15, 0.12);
+      box-shadow: 0 10px 30px rgba(16, 21, 15, 0.08);
+    }
+
+    .nav-inner {
+      height: 70px;
+    }
+
+    .nav-logo {
+      background: #10150f;
+      border-radius: 8px;
+      box-shadow: inset 0 -12px 20px rgba(255, 255, 255, 0.1), 0 10px 22px rgba(16, 21, 15, 0.12);
+    }
+
+    .nav-brand {
+      font-size: 0.96rem;
+      font-weight: 900;
+    }
+
+    .nav-tabs {
+      background: rgba(255, 255, 255, 0.66);
+      border-color: rgba(16, 21, 15, 0.11);
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+    }
+
+    .nav-tab {
+      min-height: 38px;
+      color: rgba(16, 21, 15, 0.68);
+      font-size: 0.84rem;
+    }
+
+    .nav-tab.active {
+      color: #fff;
+      background: #10150f;
+      box-shadow: 0 10px 24px rgba(16, 21, 15, 0.17);
+    }
+
+    .hero {
+      width: 100%;
+      max-width: 1920px;
+      min-height: min(760px, calc(100svh - 70px));
+      margin: 0 auto;
+      padding: clamp(34px, 5vw, 86px) var(--page-pad) clamp(26px, 4vw, 60px);
+      display: grid;
+      grid-template-columns: minmax(0, 0.9fr) minmax(360px, 0.72fr);
+      align-items: center;
+      gap: clamp(28px, 5vw, 82px);
+      position: relative;
+      isolation: isolate;
+      text-align: left;
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      left: var(--page-pad);
+      right: var(--page-pad);
+      bottom: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, rgba(16, 21, 15, 0.18), transparent);
+      transform: scaleX(calc(0.58 + var(--hero-progress) * 0.42));
+      transform-origin: center;
+    }
+
+    .hero-copy {
+      transform: translateY(calc(var(--hero-progress) * -28px));
+      transition: transform 0.08s linear;
+    }
+
+    .hero-kicker,
+    .section-kicker {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      padding: 0 10px;
+      color: #10150f;
+      background: rgba(255, 255, 255, 0.72);
+      border: 1px solid rgba(16, 21, 15, 0.13);
+      border-radius: 999px;
+      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.72rem;
+      font-weight: 800;
+      text-transform: uppercase;
+      box-shadow: 0 10px 24px rgba(16, 21, 15, 0.06);
+    }
+
+    .hero h1 {
+      max-width: 980px;
+      margin-top: 22px;
+      color: #10150f;
+      font-size: clamp(4rem, 10.2vw, 11rem);
+      line-height: 0.86;
+      font-weight: 900;
+      letter-spacing: 0;
+      text-wrap: balance;
+    }
+
+    .hero h1 span {
+      display: block;
+      color: transparent;
+      background:
+        linear-gradient(120deg, #10150f 0 38%, #047a54 46%, #2878ff 72%, #ff6f59 100%);
+      -webkit-background-clip: text;
+      background-clip: text;
+    }
+
+    .hero-lede {
+      max-width: 760px;
+      margin-top: 24px;
+      color: var(--muted-strong);
+      font-size: clamp(1rem, 1.45vw, 1.36rem);
+      line-height: 1.58;
+      font-weight: 650;
+    }
+
+    .hero-actions {
+      margin-top: 28px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .hero-link {
+      min-height: 44px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 18px;
+      color: #10150f;
+      background: rgba(255, 255, 255, 0.75);
+      border: 1px solid rgba(16, 21, 15, 0.16);
+      border-radius: 999px;
+      text-decoration: none;
+      font-size: 0.9rem;
+      font-weight: 850;
+      box-shadow: 0 14px 30px rgba(16, 21, 15, 0.08);
+      transition: transform 0.18s var(--ease-out), background 0.18s, border-color 0.18s, color 0.18s;
+    }
+
+    .hero-link:hover {
+      transform: translateY(-2px);
+      border-color: rgba(16, 21, 15, 0.28);
+      background: #fff;
+    }
+
+    .hero-link.primary {
+      color: #fff;
+      background: #10150f;
+      border-color: #10150f;
+    }
+
+    .hero-showcase {
+      position: sticky;
+      top: 92px;
+      transform:
+        translateY(calc(var(--hero-progress) * 36px))
+        scale(calc(1.06 - var(--hero-progress) * 0.18));
+      transform-origin: center;
+      transition: transform 0.08s linear;
+      will-change: transform;
+    }
+
+    .showcase-shell {
+      min-height: clamp(430px, 60vh, 640px);
+      padding: clamp(16px, 2vw, 26px);
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto;
+      overflow: hidden;
+      position: relative;
+      background:
+        linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(240, 246, 237, 0.72)),
+        linear-gradient(135deg, rgba(0, 166, 109, 0.2), rgba(40, 120, 255, 0.12));
+      border: 1px solid rgba(16, 21, 15, 0.13);
+      border-radius: 8px;
+      box-shadow: 0 36px 90px rgba(16, 21, 15, 0.18);
+    }
+
+    .showcase-shell::before {
+      content: "";
+      position: absolute;
+      inset: 12px;
+      border: 1px solid rgba(16, 21, 15, 0.08);
+      border-radius: 6px;
+      pointer-events: none;
+    }
+
+    .showcase-topline,
+    .showcase-footer {
+      position: relative;
+      z-index: 2;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      color: rgba(16, 21, 15, 0.72);
+      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.72rem;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .image-stack {
+      min-height: 0;
+      position: relative;
+      display: grid;
+      place-items: center;
+    }
+
+    .stack-card {
+      width: min(78%, 360px);
+      margin: 0;
+      overflow: hidden;
+      position: absolute;
+      background: #fff;
+      border: 1px solid rgba(16, 21, 15, 0.16);
+      border-radius: 8px;
+      box-shadow: 0 24px 52px rgba(16, 21, 15, 0.2);
+      transition: transform 0.08s linear, filter 0.08s linear;
+      will-change: transform;
+    }
+
+    .stack-card img {
+      width: 100%;
+      aspect-ratio: 4 / 3;
+      display: block;
+      object-fit: cover;
+    }
+
+    .stack-card figcaption {
+      padding: 9px 11px;
+      color: rgba(16, 21, 15, 0.74);
+      background: #fff;
+      border-top: 1px solid rgba(16, 21, 15, 0.12);
+      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.72rem;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .stack-card-source {
+      transform:
+        translate3d(calc(-52px + var(--hero-progress) * 26px), calc(-42px + var(--hero-progress) * 8px), 0)
+        rotate(calc(-7deg + var(--hero-progress) * 4deg))
+        scale(calc(0.92 + var(--hero-progress) * 0.04));
+      filter: saturate(0.86);
+    }
+
+    .stack-card-result {
+      transform:
+        translate3d(calc(56px - var(--hero-progress) * 20px), calc(42px - var(--hero-progress) * 18px), 0)
+        rotate(calc(6deg - var(--hero-progress) * 5deg))
+        scale(calc(1.02 - var(--hero-progress) * 0.02));
+    }
+
+    .mask-window {
+      width: min(46%, 210px);
+      aspect-ratio: 1.08;
+      position: relative;
+      z-index: 4;
+      border: 2px dashed rgba(255, 111, 89, 0.92);
+      border-radius: 8px;
+      background: rgba(0, 166, 109, 0.18);
+      box-shadow: inset 0 0 0 999px rgba(255, 255, 255, 0.05), 0 20px 50px rgba(255, 111, 89, 0.22);
+      transform:
+        translate3d(calc(var(--hero-progress) * 24px), calc(var(--hero-progress) * -14px), 0)
+        scale(calc(0.86 + var(--hero-progress) * 0.24));
+      transition: transform 0.08s linear;
+    }
+
+    .mask-window span {
+      width: 18px;
+      height: 18px;
+      position: absolute;
+      right: 13px;
+      bottom: 13px;
+      background: #ff6f59;
+      border-radius: 50%;
+      box-shadow: 0 0 0 8px rgba(255, 111, 89, 0.18);
+    }
+
+    .showcase-footer {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      text-transform: none;
+    }
+
+    .showcase-footer div {
+      min-width: 0;
+      padding-top: 12px;
+      border-top: 1px solid rgba(16, 21, 15, 0.11);
+    }
+
+    .showcase-footer strong,
+    .showcase-footer span {
+      display: block;
+    }
+
+    .showcase-footer strong {
+      color: #10150f;
+      font-size: clamp(1.05rem, 2vw, 1.7rem);
+      line-height: 1;
+    }
+
+    .showcase-footer span {
+      margin-top: 5px;
+      color: rgba(16, 21, 15, 0.58);
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      overflow-wrap: anywhere;
+    }
+
+    .stats {
+      padding: clamp(18px, 3vw, 38px) var(--page-pad) clamp(14px, 2vw, 28px);
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .stat {
+      min-height: 96px;
+      align-items: flex-end;
+      justify-content: space-between;
+      padding: 18px;
+      background: rgba(255, 255, 255, 0.78);
+      border-color: rgba(16, 21, 15, 0.12);
+      border-left-width: 0;
+      box-shadow: var(--shadow-soft);
+      backdrop-filter: blur(18px);
+    }
+
+    .stat::before {
+      content: "";
+      width: 10px;
+      height: 10px;
+      align-self: flex-start;
+      flex: 0 0 auto;
+      background: var(--accent);
+      border-radius: 999px;
+      box-shadow: 18px 0 0 var(--coral), 36px 0 0 var(--blue);
+    }
+
+    .stat-value {
+      font-size: clamp(1.8rem, 4vw, 4.1rem);
+      line-height: 0.9;
+    }
+
+    .stat-label {
+      max-width: 9em;
+      white-space: normal;
+      text-align: right;
+    }
+
+    .guide-section {
+      padding: clamp(16px, 3vw, 36px) var(--page-pad) clamp(24px, 4vw, 58px);
+    }
+
+    .guide-panel {
+      grid-template-columns: minmax(240px, 0.68fr) minmax(460px, 1fr) minmax(260px, 0.7fr);
+      padding: 0;
+      background: transparent;
+      border: 0;
+      border-radius: 0;
+      box-shadow: none;
+    }
+
+    .guide-copy {
+      align-self: start;
+      position: sticky;
+      top: 92px;
+    }
+
+    .guide-eyebrow,
+    .mode-help-kicker {
+      color: #10150f;
+      background: rgba(255, 255, 255, 0.72);
+      border-color: rgba(16, 21, 15, 0.13);
+      text-transform: uppercase;
+    }
+
+    .guide-copy h2,
+    .mode-help h3 {
+      margin-top: 14px;
+      font-size: clamp(1.6rem, 3vw, 3rem);
+      line-height: 0.98;
+      letter-spacing: 0;
+    }
+
+    .guide-copy p,
+    .mode-help p {
+      font-size: 0.94rem;
+      color: var(--muted-strong);
+    }
+
+    .guide-steps {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .guide-steps li,
+    .mode-help {
+      padding: 18px;
+      background: rgba(255, 255, 255, 0.78);
+      border: 1px solid rgba(16, 21, 15, 0.12);
+      border-radius: 8px;
+      box-shadow: var(--shadow-soft);
+      backdrop-filter: blur(18px);
+      transition: transform 0.22s var(--ease-out), border-color 0.22s, box-shadow 0.22s;
+    }
+
+    .guide-steps li:hover,
+    .mode-help:hover {
+      transform: translateY(-3px);
+      border-color: rgba(0, 166, 109, 0.28);
+      box-shadow: 0 22px 54px rgba(16, 21, 15, 0.13);
+    }
+
+    .guide-steps li::before {
+      background: #10150f;
+    }
+
+    .guide-steps strong {
+      font-size: 0.98rem;
+    }
+
+    .guide-steps span,
+    .mode-help ul {
+      color: var(--muted);
+    }
+
+    .workbench-intro {
+      margin: 0 0 18px;
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 18px;
+    }
+
+    .workbench-intro h2 {
+      max-width: 820px;
+      margin: 0;
+      font-size: clamp(2.1rem, 5.6vw, 6.8rem);
+      line-height: 0.9;
+      font-weight: 900;
+      letter-spacing: 0;
+      text-align: right;
+    }
+
+    .section {
+      padding: clamp(16px, 3vw, 34px) var(--page-pad) clamp(52px, 7vw, 96px);
+    }
+
+    .tool-grid {
+      grid-template-columns: minmax(300px, 0.72fr) minmax(520px, 1.22fr) minmax(300px, 0.68fr);
+      gap: 16px;
+      align-items: start;
+    }
+
+    .panel {
+      padding: 12px;
+      background: rgba(255, 255, 255, 0.86);
+      border-color: rgba(16, 21, 15, 0.13);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px);
+      transition: transform 0.24s var(--ease-out), border-color 0.24s, box-shadow 0.24s;
+    }
+
+    .panel:hover {
+      border-color: rgba(0, 166, 109, 0.24);
+      box-shadow: 0 28px 70px rgba(16, 21, 15, 0.16);
+    }
+
+    .panel-header {
+      padding: 2px 3px 10px;
+      border-bottom-color: rgba(16, 21, 15, 0.1);
+    }
+
+    .panel-title {
+      font-size: 0.9rem;
+      text-transform: uppercase;
+    }
+
+    .panel-badge {
+      color: #10150f;
+      background: rgba(239, 244, 237, 0.85);
+      border-color: rgba(16, 21, 15, 0.1);
+    }
+
+    .canvas-wrap {
+      min-height: clamp(320px, 44vh, 640px);
+      background-color: #edf3ea;
+      background-image:
+        linear-gradient(45deg, rgba(16, 21, 15, 0.05) 25%, transparent 25%),
+        linear-gradient(-45deg, rgba(16, 21, 15, 0.05) 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, rgba(16, 21, 15, 0.05) 75%),
+        linear-gradient(-45deg, transparent 75%, rgba(16, 21, 15, 0.05) 75%);
+      border-color: rgba(16, 21, 15, 0.12);
+    }
+
+    .canvas-wrap canvas {
+      border-radius: 6px;
+      box-shadow: 0 24px 54px rgba(16, 21, 15, 0.18);
+    }
+
+    .compare-strip figure {
+      padding: 8px;
+      background: rgba(255, 255, 255, 0.72);
+      border: 1px solid rgba(16, 21, 15, 0.1);
+      border-radius: 8px;
+    }
+
+    .compare-strip figcaption {
+      color: #10150f;
+      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+      text-transform: uppercase;
+    }
+
+    .compare-strip canvas {
+      border-color: rgba(16, 21, 15, 0.12);
+    }
+
+    .controls-panel {
+      top: 92px;
+    }
+
+    .control-label {
+      color: rgba(16, 21, 15, 0.66);
+      font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+      text-transform: uppercase;
+    }
+
+    select,
+    .btn,
+    .segmented,
+    .readout {
+      background: rgba(255, 255, 255, 0.76);
+      border-color: rgba(16, 21, 15, 0.14);
+    }
+
+    select {
+      min-height: 44px;
+    }
+
+    .segmented button.active,
+    .toggle:has(input:checked) {
+      background: #10150f;
+      border-color: #10150f;
+      box-shadow: 0 12px 24px rgba(16, 21, 15, 0.16);
+    }
+
+    input[type="range"] {
+      accent-color: #10150f;
+    }
+
+    .range-value,
+    .case-metric-value.good {
+      color: var(--accent-strong);
+    }
+
+    .btn.primary {
+      background: #10150f;
+      border-color: #10150f;
+    }
+
+    .btn:hover {
+      color: #10150f;
+      background: var(--accent-soft);
+      border-color: rgba(0, 166, 109, 0.34);
+    }
+
+    .readout {
+      padding: 14px;
+    }
+
+    .readout-item dt {
+      color: rgba(16, 21, 15, 0.58);
+    }
+
+    .chart-container,
+    .flow-diagram,
+    .case-card,
+    .limit-card {
+      background: rgba(255, 255, 255, 0.82);
+      border-color: rgba(16, 21, 15, 0.12);
+      box-shadow: var(--shadow-soft);
+      backdrop-filter: blur(18px);
+    }
+
+    .section-title {
+      margin-top: clamp(22px, 4vw, 54px);
+      font-size: clamp(1.5rem, 3.4vw, 3.7rem);
+      line-height: 0.95;
+    }
+
+    .section-title::before {
+      background: #10150f;
+    }
+
+    .flow-step,
+    .case-metric {
+      background: rgba(244, 247, 242, 0.76);
+      border-color: rgba(16, 21, 15, 0.1);
+    }
+
+    .footer {
+      border-top-color: rgba(16, 21, 15, 0.12);
+    }
+
+    .motion-ready .reveal,
+    .motion-ready .panel,
+    .motion-ready .case-card,
+    .motion-ready .limit-card,
+    .motion-ready .flow-step {
+      opacity: 0;
+      transform: translateY(26px) scale(0.985);
+      transition:
+        opacity 0.55s var(--ease-out),
+        transform 0.65s var(--ease-out),
+        border-color 0.22s,
+        box-shadow 0.22s;
+      transition-delay: var(--reveal-delay, 0ms);
+    }
+
+    .motion-ready .is-visible {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+
+    .motion-ready .hero-copy.reveal.is-visible {
+      transform: translateY(calc(var(--hero-progress) * -28px)) scale(1);
+    }
+
+    .motion-ready .hero-showcase.reveal.is-visible {
+      transform:
+        translateY(calc(var(--hero-progress) * 36px))
+        scale(calc(1.06 - var(--hero-progress) * 0.18));
+    }
+
+    .motion-ready .panel.is-visible:hover {
+      transform: translateY(-2px) scale(1);
+    }
+
+    .motion-ready .tool-grid .panel:nth-child(2) {
+      --reveal-delay: 70ms;
+    }
+
+    .motion-ready .tool-grid .panel:nth-child(3) {
+      --reveal-delay: 140ms;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html {
+        scroll-behavior: auto;
+      }
+
+      *,
+      *::before,
+      *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+        transition-duration: 0.01ms !important;
+      }
+
+      .hero-copy,
+      .hero-showcase,
+      .stack-card,
+      .mask-window {
+        transform: none !important;
+      }
+    }
+
+    @media (max-width: 1420px) {
+      .hero {
+        grid-template-columns: minmax(0, 1fr);
+        min-height: auto;
+      }
+
+      .hero-showcase {
+        position: relative;
+        top: auto;
+        max-width: 760px;
+      }
+
+      .tool-grid {
+        grid-template-columns: minmax(280px, 0.9fr) minmax(460px, 1.1fr);
+      }
+
+      .guide-panel {
+        grid-template-columns: 1fr;
+      }
+
+      .guide-copy {
+        position: static;
+      }
+    }
+
+    @media (max-width: 900px) {
+      .nav-inner {
+        height: auto;
+        padding: 12px 0;
+      }
+
+      .hero {
+        padding-top: 30px;
+      }
+
+      .hero h1 {
+        font-size: clamp(3.35rem, 16vw, 7rem);
+      }
+
+      .hero-actions,
+      .workbench-intro,
+      .chart-header {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .workbench-intro h2 {
+        text-align: left;
+      }
+
+      .stats,
+      .guide-steps,
+      .tool-grid,
+      .controls-panel,
+      .case-grid,
+      .limit-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .stat {
+        min-height: 84px;
+      }
+
+      .hero-link {
+        width: 100%;
+      }
+
+      .showcase-shell {
+        min-height: 410px;
+      }
+
+      .controls-panel {
+        display: block;
+      }
+    }
+
+    @media (max-width: 560px) {
+      .hero h1 {
+        font-size: clamp(2.9rem, 18vw, 5.4rem);
+      }
+
+      .hero-lede {
+        font-size: 0.96rem;
+      }
+
+      .showcase-footer,
+      .btn-row,
+      .readout-grid,
+      .case-metrics {
+        grid-template-columns: 1fr;
+      }
+
+      .showcase-shell {
+        min-height: 340px;
+      }
+
+      .stack-card {
+        width: 84%;
+      }
+
+      .mask-window {
+        width: 54%;
+      }
+    }
+
+    [hidden] {
+      display: none !important;
+    }
+
+    /* Face Swap Panel Styles */
+    .face-swap-panel {
+      grid-column: 1 / -1;
+      margin-top: 24px;
+      padding: 20px;
+      background: rgba(255, 255, 255, 0.92);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+    }
+
+    .face-swap-panel .face-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+
+    .face-select {
+      padding: 4px 8px;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      font-size: 0.85rem;
+      background: var(--surface);
+      margin-left: auto;
+    }
+
+    .face-upload {
+      padding: 8px;
+      text-align: center;
+    }
+
+    .face-info {
+      padding: 8px 12px;
+      font-size: 0.8rem;
+      color: var(--muted);
+      text-align: center;
+      min-height: 40px;
+    }
+
+    .face-info.detecting {
+      color: var(--amber);
+    }
+
+    .face-info.success {
+      color: var(--accent);
+    }
+
+    .face-info.error {
+      color: var(--coral);
+    }
+
+    .face-actions {
+      display: flex;
+      gap: 8px;
+      padding: 12px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .face-controls {
+      display: flex;
+      gap: 24px;
+      padding: 16px;
+      background: var(--surface-soft);
+      border-radius: 8px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .face-comparison {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+    }
+
+    .face-comparison figure {
+      text-align: center;
+      margin: 0;
+    }
+
+    .face-comparison figcaption {
+      padding: 8px;
+      font-weight: 600;
+      color: var(--muted-strong);
+    }
+
+    .face-comparison canvas {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      max-width: 100%;
+    }
+
+    #faceSwapStatus {
+      font-weight: 500;
+    }
+
+    .face-swap-active #tool-section .tool-grid > .panel:not(.controls-panel) {
+      display: none;
+    }
+
+    .face-swap-active #tool-section .tool-grid {
+      grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
+    }
+
+    .face-swap-active .controls-panel {
+      grid-column: 1;
+    }
+
+    .face-swap-active .face-swap-panel {
+      grid-column: 2;
+      margin-top: 0;
+    }
+
+    @media (max-width: 900px) {
+      .face-swap-active #tool-section .tool-grid,
+      .face-swap-panel .face-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .face-swap-active .controls-panel,
+      .face-swap-active .face-swap-panel {
+        grid-column: 1;
+      }
+
+      .face-comparison {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <nav class="nav">
+    <div class="nav-inner">
+      <a href="#" class="nav-brand">
+        <div class="nav-logo">∇</div>
+        Poisson 图像融合
+      </a>
+      <div class="nav-tabs">
+        <button class="nav-tab active" data-tab="tool">交互工具</button>
+        <button class="nav-tab" data-tab="analysis">实验分析</button>
+      </div>
+    </div>
+  </nav>
+
+  <header class="hero" data-zoom-panel>
+    <div class="hero-copy reveal">
+      <p class="hero-kicker">USTC MM 2026 · Interactive Poisson Lab</p>
+      <h1><span>Gradient fields</span> blending live.</h1>
+      <p class="hero-lede">把图像边界交给泊松方程，选区、纹理和结果在滚动中逐层靠近。页面保留完整工作台，同时加入类似 Editions 的大字号、吸附式媒体和滑动缩放节奏。</p>
+      <div class="hero-actions" aria-label="页面入口">
+        <a class="hero-link primary" href="#tool-section">进入工作台</a>
+        <a class="hero-link" href="#analysis-section" data-open-analysis>查看实验分析</a>
+      </div>
+    </div>
+
+    <div class="hero-showcase reveal" aria-label="Poisson 融合视觉预览">
+      <div class="showcase-shell">
+        <div class="showcase-topline">
+          <span>Live solve</span>
+          <span>Import / Mixing</span>
+        </div>
+        <div class="image-stack">
+          <figure class="stack-card stack-card-source">
+            <img src="assets/cases/case3_source.png" alt="源图样例">
+            <figcaption>source</figcaption>
+          </figure>
+          <figure class="stack-card stack-card-result">
+            <img src="assets/cases/case3_target.png" alt="目标图样例">
+            <figcaption>target</figcaption>
+          </figure>
+          <div class="mask-window">
+            <span></span>
+          </div>
+        </div>
+        <div class="showcase-footer">
+          <div>
+            <strong>86.8%</strong>
+            <span>max seam drop</span>
+          </div>
+          <div>
+            <strong>48ms</strong>
+            <span>avg solve</span>
+          </div>
+          <div>
+            <strong>5</strong>
+            <span>cases</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <section class="stats" aria-label="实验指标">
+    <div class="stat reveal">
+      <div class="stat-value">86.8%</div>
+      <div class="stat-label">最大接缝降幅</div>
+    </div>
+    <div class="stat reveal">
+      <div class="stat-value">48ms</div>
+      <div class="stat-label">平均处理时间</div>
+    </div>
+    <div class="stat reveal">
+      <div class="stat-value">5 组</div>
+      <div class="stat-label">测试样例</div>
+    </div>
+  </section>
+
+  <section class="guide-section" aria-label="工作流概览">
+    <div class="guide-panel reveal">
+      <div class="guide-copy">
+        <span class="guide-eyebrow">Workflow</span>
+        <h2>选区进入目标画布，梯度决定边界语气</h2>
+        <p>工作台把源图、目标图和结果放在同一视线里：左侧定义 Ω，中间实时求解，右侧切换模式和参数。</p>
+      </div>
+      <ol class="guide-steps">
+        <li>
+          <strong>Ω mask</strong>
+          <span>预设或手绘选区决定参与求解的像素集合。</span>
+        </li>
+        <li>
+          <strong>Gradient field</strong>
+          <span>Importing 保留源结构，Mixing 优先保留强纹理。</span>
+        </li>
+        <li>
+          <strong>SOR solve</strong>
+          <span>迭代次数控制实时性与边界收敛程度。</span>
+        </li>
+        <li>
+          <strong>Compare</strong>
+          <span>三路结果展示直接复制与 Poisson 求解差异。</span>
+        </li>
+      </ol>
+      <div class="mode-help" aria-live="polite">
+        <span class="mode-help-kicker">当前模式</span>
+        <h3 id="modeHelpTitle">Seamless Cloning</h3>
+        <p id="modeHelpText">把左侧选区融合到中间背景图。拖动中间虚线区域可以改变粘贴位置。</p>
+        <ul id="modeHelpSteps">
+          <li>点击“预设选区”恢复默认遮罩。</li>
+          <li>点击“绘制选区”后在左侧画布拖动手绘遮罩。</li>
+          <li>切换 Import / Mixing 比较不同梯度策略。</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- Tool Section -->
+  <section class="section" id="tool-section">
+    <div class="workbench-intro reveal">
+      <span class="section-kicker">Live Workspace</span>
+      <h2>实时拖动、求解、对比</h2>
+    </div>
+    <div class="tool-grid">
+      <!-- Source -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title" id="sourceTitle">源图与选区</span>
+          <span class="panel-badge" id="maskStats">0 px</span>
+        </div>
+        <div class="canvas-wrap">
+          <canvas id="sourceCanvas"></canvas>
+        </div>
+      </div>
+
+      <!-- Result -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title" id="resultTitle">背景与融合结果</span>
+          <span class="panel-badge" id="dragLabel">拖动融合</span>
+        </div>
+        <div class="canvas-wrap" style="min-height: 380px;">
+          <canvas id="resultCanvas"></canvas>
+        </div>
+        <div class="compare-strip" id="compareStrip">
+          <figure>
+            <figcaption id="naiveCaption">直接复制</figcaption>
+            <canvas id="naiveCanvas"></canvas>
+          </figure>
+          <figure>
+            <figcaption id="importCaption">Importing</figcaption>
+            <canvas id="importCanvas"></canvas>
+          </figure>
+          <figure>
+            <figcaption id="mixingCaption">Mixing</figcaption>
+            <canvas id="mixingCanvas"></canvas>
+          </figure>
+        </div>
+      </div>
+
+      <!-- Controls -->
+      <div class="panel controls-panel">
+        <div class="panel-header">
+          <span class="panel-title">控制面板</span>
+        </div>
+
+        <div class="control-group">
+          <label class="control-label">测试样例</label>
+          <select id="caseSelect"></select>
+        </div>
+
+        <div class="control-group">
+          <label class="control-label">应用模式</label>
+          <select id="appMode">
+            <option value="clone">Seamless Cloning</option>
+            <option value="inpaint">Poisson 修复</option>
+            <option value="texture">纹理压平</option>
+            <option value="faceswap">人脸融合</option>
+          </select>
+        </div>
+
+        <div class="control-group">
+          <label class="control-label">梯度模式</label>
+          <div class="segmented">
+            <button type="button" data-gradient="import" class="active">Import</button>
+            <button type="button" data-gradient="mixing">Mixing</button>
+          </div>
+        </div>
+
+        <div class="control-group">
+          <div class="toggle-row">
+            <label class="toggle">
+              <input type="checkbox" id="compareToggle" checked>
+              <span class="toggle-slider"></span>
+            </label>
+            <span class="toggle-label">显示三路对比</span>
+          </div>
+        </div>
+
+        <div class="control-group">
+          <label class="control-label">迭代次数</label>
+          <div class="range-wrap">
+            <input type="range" id="iterationSlider" min="40" max="360" step="20" value="180">
+            <span class="range-value" id="iterationValue">180</span>
+          </div>
+        </div>
+
+        <div class="control-group">
+          <label class="control-label">遮罩透明度</label>
+          <div class="range-wrap">
+            <input type="range" id="opacitySlider" min="0.05" max="0.65" step="0.05" value="0.28">
+            <span class="range-value" id="opacityValue">0.28</span>
+          </div>
+        </div>
+
+        <div class="control-group" id="textureField">
+          <label class="control-label">纹理阈值</label>
+          <div class="range-wrap">
+            <input type="range" id="textureSlider" min="4" max="80" step="2" value="28">
+            <span class="range-value" id="textureValue">28</span>
+          </div>
+        </div>
+
+        <div class="control-group btn-row">
+          <button type="button" id="presetMaskBtn" class="btn">预设选区</button>
+          <button type="button" id="drawMaskBtn" class="btn">绘制选区</button>
+        </div>
+
+        <div class="control-group btn-row">
+          <button type="button" id="autoDemoBtn" class="btn">自动演示</button>
+          <button type="button" id="recordBtn" class="btn">录制</button>
+        </div>
+
+        <div class="control-group btn-row">
+          <button type="button" id="saveFrameBtn" class="btn">保存帧</button>
+          <button type="button" id="resetBtn" class="btn primary">重置</button>
+        </div>
+
+        <div class="readout">
+          <div class="readout-grid">
+            <div class="readout-item">
+              <dt>运行</dt>
+              <dd id="runtimeStatus">初始化</dd>
+            </div>
+            <div class="readout-item">
+              <dt>求解</dt>
+              <dd id="solveStats">-</dd>
+            </div>
+            <div class="readout-item">
+              <dt>矩阵</dt>
+              <dd id="matrixStats">-</dd>
+            </div>
+            <div class="readout-item">
+              <dt>位置</dt>
+              <dd id="positionStats">-</dd>
+            </div>
+            <div class="readout-item">
+              <dt>接缝</dt>
+              <dd id="seamStats">-</dd>
+            </div>
+            <div class="readout-item">
+              <dt>状态</dt>
+              <dd id="recordStats">待机</dd>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Face Swap Panel (hidden by default) -->
+      <div class="face-swap-panel" id="faceSwapPanel" hidden>
+        <div class="face-grid">
+          <!-- Source Face -->
+          <div class="panel">
+            <div class="panel-header">
+              <span class="panel-title">源人脸（将被替换）</span>
+              <select id="faceSourceSelect" class="face-select">
+                <option value="">选择预设...</option>
+                <option value="face1">人物 A</option>
+                <option value="face2">人物 B</option>
+                <option value="face3">人物 C</option>
+                <option value="face4">人物 D</option>
+              </select>
+            </div>
+            <div class="canvas-wrap">
+              <canvas id="sourceFaceCanvas"></canvas>
+            </div>
+            <div class="face-upload">
+              <input type="file" id="sourceFaceUpload" accept="image/*" hidden>
+              <button type="button" class="btn" onclick="document.getElementById('sourceFaceUpload').click()">上传图片</button>
+            </div>
+            <div class="face-info" id="sourceFaceInfo"></div>
+          </div>
+
+          <!-- Target Face -->
+          <div class="panel">
+            <div class="panel-header">
+              <span class="panel-title">目标人脸（接收换脸）</span>
+              <select id="faceTargetSelect" class="face-select">
+                <option value="">选择预设...</option>
+                <option value="face1">人物 A</option>
+                <option value="face2">人物 B</option>
+                <option value="face3">人物 C</option>
+                <option value="face4">人物 D</option>
+              </select>
+            </div>
+            <div class="canvas-wrap">
+              <canvas id="targetFaceCanvas"></canvas>
+            </div>
+            <div class="face-upload">
+              <input type="file" id="targetFaceUpload" accept="image/*" hidden>
+              <button type="button" class="btn" onclick="document.getElementById('targetFaceUpload').click()">上传图片</button>
+            </div>
+            <div class="face-info" id="targetFaceInfo"></div>
+          </div>
+
+          <!-- Result -->
+          <div class="panel">
+            <div class="panel-header">
+              <span class="panel-title">换脸结果</span>
+            </div>
+            <div class="canvas-wrap">
+              <canvas id="faceSwapResultCanvas"></canvas>
+            </div>
+            <div class="face-actions">
+              <button type="button" id="detectFacesBtn" class="btn primary">检测人脸</button>
+              <button type="button" id="alignFacesBtn" class="btn primary" disabled>对齐融合</button>
+              <button type="button" id="saveFaceSwapBtn" class="btn">保存结果</button>
+            </div>
+            <div class="face-info" id="faceSwapStatus"></div>
+          </div>
+        </div>
+
+        <!-- Face Swap Controls -->
+        <div class="face-controls">
+          <div class="control-group">
+            <label class="control-label">融合程度</label>
+            <div class="range-wrap">
+              <input type="range" id="faceBlendSlider" min="0" max="100" step="5" value="100">
+              <span class="range-value" id="faceBlendValue">100%</span>
+            </div>
+          </div>
+          <div class="control-group">
+            <label class="control-label">对齐方式</label>
+            <div class="segmented">
+              <button type="button" data-align="eyes" class="active">眼睛对齐</button>
+              <button type="button" data-align="landmarks">特征点对齐</button>
+            </div>
+          </div>
+          <div class="control-group">
+            <label class="control-label">显示检测</label>
+            <div class="toggle-row">
+              <label class="toggle">
+                <input type="checkbox" id="showLandmarksToggle" checked>
+                <span class="toggle-slider"></span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Face Comparison -->
+        <div class="face-comparison" id="faceComparison">
+          <figure>
+            <figcaption>直接混合</figcaption>
+            <canvas id="naiveFaceCanvas"></canvas>
+          </figure>
+          <figure>
+            <figcaption>Poisson 融合</figcaption>
+            <canvas id="poissonFaceCanvas"></canvas>
+          </figure>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Analysis Section -->
+  <section class="section" id="analysis-section" hidden>
+    <!-- Chart -->
+    <div class="analysis-section">
+      <h2 class="section-title">接缝跳变量对比</h2>
+      <div class="chart-container">
+        <div class="chart-header">
+          <span class="chart-title">四组测试样例量化对比</span>
+          <div class="chart-legend">
+            <div class="legend-item">
+              <div class="legend-dot" style="background: #f472b6;"></div>
+              直接复制
+            </div>
+            <div class="legend-item">
+              <div class="legend-dot" style="background: #0d7c66;"></div>
+              Importing
+            </div>
+            <div class="legend-item">
+              <div class="legend-dot" style="background: #1d9bf0;"></div>
+              Mixing
+            </div>
+          </div>
+        </div>
+        <div class="chart-wrap">
+          <canvas id="seamChart"></canvas>
+        </div>
+      </div>
+
+      <!-- Flow -->
+      <h2 class="section-title">算法流程</h2>
+      <div class="flow-diagram">
+        <div class="flow-step">
+          <div class="flow-num">1</div>
+          <div class="flow-title">能量最小化</div>
+          <div class="flow-desc">min ∫ |∇v - ∇s|²</div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step">
+          <div class="flow-num">2</div>
+          <div class="flow-title">变分推导</div>
+          <div class="flow-desc">Δv = Δs in Ω</div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step">
+          <div class="flow-num">3</div>
+          <div class="flow-title">离散化</div>
+          <div class="flow-desc">4-邻域有限差分</div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step">
+          <div class="flow-num">4</div>
+          <div class="flow-title">稀疏矩阵</div>
+          <div class="flow-desc">Av = b 方程组</div>
+        </div>
+        <div class="flow-arrow">→</div>
+        <div class="flow-step">
+          <div class="flow-num">5</div>
+          <div class="flow-title">SOR 迭代</div>
+          <div class="flow-desc">实时近似求解</div>
+        </div>
+      </div>
+
+      <!-- Case Cards -->
+      <h2 class="section-title">样例深度解析</h2>
+      <div class="case-grid">
+        <div class="case-card">
+          <div class="case-header">
+            <div class="case-icon">🌊</div>
+            <div>
+              <div class="case-name">Case 1: 海面 → 海岛</div>
+              <div class="case-desc">同色系背景，边界最易融合</div>
+            </div>
+          </div>
+          <div class="case-metrics">
+            <div class="case-metric">
+              <div class="case-metric-value bad">51.96</div>
+              <div class="case-metric-label">直接复制</div>
+            </div>
+            <div class="case-metric">
+              <div class="case-metric-value good">6.85</div>
+              <div class="case-metric-label">Importing</div>
+            </div>
+            <div class="case-metric">
+              <div class="case-metric-value good">86.8%</div>
+              <div class="case-metric-label">降幅</div>
+            </div>
+          </div>
+          <p class="case-analysis">同色系背景下，两张水面图亮度、波纹方向仍有差异。Importing 效果极佳，边缘几乎完全融入背景。</p>
+        </div>
+
+        <div class="case-card">
+          <div class="case-header">
+            <div class="case-icon">🌸</div>
+            <div>
+              <div class="case-name">Case 2: 花朵 → 织物</div>
+              <div class="case-desc">颜色差异最大，边界挑战高</div>
+            </div>
+          </div>
+          <div class="case-metrics">
+            <div class="case-metric">
+              <div class="case-metric-value bad">68.18</div>
+              <div class="case-metric-label">直接复制</div>
+            </div>
+            <div class="case-metric">
+              <div class="case-metric-value good">15.22</div>
+              <div class="case-metric-label">Importing</div>
+            </div>
+            <div class="case-metric">
+              <div class="case-metric-value good">77.7%</div>
+              <div class="case-metric-label">降幅</div>
+            </div>
+          </div>
+          <p class="case-analysis">鲜艳花朵与浅色织物对比强烈。Importing 消除硬边，但局部颜色被背景拉淡。Mixing 保留更多织物纹理。</p>
+        </div>
+
+        <div class="case-card">
+          <div class="case-header">
+            <div class="case-icon">🏛️</div>
+            <div>
+              <div class="case-name">Case 3: 霓虹 → 砖墙</div>
+              <div class="case-desc">强纹理背景，Mixing 优势明显</div>
+            </div>
+          </div>
+          <div class="case-metrics">
+            <div class="case-metric">
+              <div class="case-metric-value bad">88.05</div>
+              <div class="case-metric-label">直接复制</div>
+            </div>
+            <div class="case-metric">
+              <div class="case-metric-value good">11.69</div>
+              <div class="case-metric-label">Importing</div>
+            </div>
+            <div class="case-metric">
+              <div class="case-metric-value good">86.7%</div>
+              <div class="case-metric-label">降幅</div>
+            </div>
+          </div>
+          <p class="case-analysis">直接复制出现明显黑色边缘。Importing 接缝最低。Mixing 保留更多砖墙纹理，整体更协调。</p>
+        </div>
+
+        <div class="case-card">
+          <div class="case-header">
+            <div class="case-icon">🐟</div>
+            <div>
+              <div class="case-name">Case 4: 鱼 → 水面</div>
+              <div class="case-desc">复杂轮廓，曲线边界</div>
+            </div>
+          </div>
+          <div class="case-metrics">
+            <div class="case-metric">
+              <div class="case-metric-value bad">39.92</div>
+              <div class="case-metric-label">直接复制</div>
+            </div>
+            <div class="case-metric">
+              <div class="case-metric-value good">7.60</div>
+              <div class="case-metric-label">Importing</div>
+            </div>
+            <div class="case-metric">
+              <div class="case-metric-value good">81.0%</div>
+              <div class="case-metric-label">降幅</div>
+            </div>
+          </div>
+          <p class="case-analysis">复杂鱼轮廓融入水面。Importing 稳定，Mixing 引入水纹使鱼更像在水中，但可能削弱清晰度。</p>
+        </div>
+      </div>
+
+      <!-- Limitations -->
+      <h2 class="section-title">局限性分析</h2>
+      <div class="limit-grid">
+        <div class="limit-card">
+          <div class="limit-icon">🎨</div>
+          <h3>颜色偏差问题</h3>
+          <p>源目标颜色差异大时，主体颜色被背景拉淡。需要更复杂的色彩校正机制。</p>
+        </div>
+        <div class="limit-card">
+          <div class="limit-icon">✏️</div>
+          <h3>遮罩敏感</h3>
+          <p>边界包含背景像素会导致结果变"脏"。高质量遮罩是优秀结果的前提。</p>
+        </div>
+        <div class="limit-card">
+          <div class="limit-icon">⚡</div>
+          <h3>精度权衡</h3>
+          <p>SOR 迭代与精确求解存在差距。可考虑 GPU 加速或更强求解器。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <p>Poisson 图像融合实验 · USTC MM 2026</p>
+  </footer>
+
+  <script src="app.js"></script>
+  <script>
+    // Tab switching
+    const toolSection = document.getElementById('tool-section');
+    const analysisSection = document.getElementById('analysis-section');
+    const navTabs = document.querySelectorAll('.nav-tab');
+
+    navTabs.forEach(tab => {
+      tab.addEventListener('click', () => {
+        navTabs.forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+
+        if (tab.dataset.tab === 'tool') {
+          toolSection.hidden = false;
+          analysisSection.hidden = true;
+        } else {
+          toolSection.hidden = true;
+          analysisSection.hidden = false;
+          initChart();
+        }
+      });
+    });
+
+    // Chart
+    let chart = null;
+    function initChart() {
+      if (chart) return;
+
+      const ctx = document.getElementById('seamChart').getContext('2d');
+      chart = new Chart(ctx, {
+        type: 'bar',
+        data: {
+          labels: ['Case 1\n(海面)', 'Case 2\n(织物)', 'Case 3\n(砖墙)', 'Case 4\n(水面)'],
+          datasets: [
+            {
+              label: '直接复制',
+              data: [51.96, 68.18, 88.05, 39.92],
+              backgroundColor: 'rgba(244, 114, 182, 0.85)',
+              borderColor: '#f472b6',
+              borderWidth: 2,
+              borderRadius: 8
+            },
+            {
+              label: 'Importing',
+              data: [6.85, 15.22, 11.69, 7.60],
+              backgroundColor: 'rgba(13, 124, 102, 0.85)',
+              borderColor: '#0d7c66',
+              borderWidth: 2,
+              borderRadius: 8
+            },
+            {
+              label: 'Mixing',
+              data: [6.80, 16.51, 13.04, 9.56],
+              backgroundColor: 'rgba(29, 155, 240, 0.85)',
+              borderColor: '#1d9bf0',
+              borderWidth: 2,
+              borderRadius: 8
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              backgroundColor: 'rgba(255,255,255,0.95)',
+              titleColor: '#1a1a1a',
+              bodyColor: '#6b6b6b',
+              borderColor: '#e5e3df',
+              borderWidth: 1,
+              padding: 12,
+              cornerRadius: 8,
+              callbacks: {
+                label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y.toFixed(2)}`
+              }
+            }
+          },
+          scales: {
+            x: { grid: { display: false }, ticks: { font: { size: 11 } } },
+            y: {
+              beginAtZero: true,
+              grid: { color: 'rgba(0,0,0,0.05)' },
+              ticks: { font: { size: 11 } },
+              title: { display: true, text: '接缝跳变量 (越低越好)', color: '#6b6b6b' }
+            }
+          }
+        }
+      });
+    }
+  </script>
+</body>
+</html>
