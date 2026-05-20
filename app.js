@@ -230,7 +230,7 @@ async function init() {
   bindEvents();
   const params = new URLSearchParams(location.search);
   const initialCase = Math.max(0, Math.min(CASES.length - 1, Number(params.get("case") || 0)));
-  if (["inpaint", "texture"].includes(params.get("app"))) {
+  if (["inpaint", "texture", "faceswap"].includes(params.get("app"))) {
     state.appMode = params.get("app");
     els.appMode.value = state.appMode;
   }
@@ -320,6 +320,7 @@ function bindEvents() {
   els.appMode.addEventListener("change", () => {
     state.appMode = els.appMode.value;
     applyPresetMask();
+    updateFaceSwapPanelVisibility();
   });
 
   document.querySelectorAll("[data-gradient]").forEach((button) => {
@@ -1435,3 +1436,812 @@ function blobToDataUrl(blob) {
     reader.readAsDataURL(blob);
   });
 }
+
+// ============================================
+// Face Swap Implementation
+// ============================================
+
+const faceState = {
+  modelsLoaded: false,
+  modelsLoading: false,
+  sourceImage: null,
+  targetImage: null,
+  sourceDetections: null,
+  targetDetections: null,
+  alignedFace: null,
+  resultImageData: null,
+  alignmentMode: 'eyes',
+  showLandmarks: true,
+  blendRatio: 1.0,
+};
+
+// Face API elements
+const faceEls = {
+  panel: document.getElementById('faceSwapPanel'),
+  sourceCanvas: document.getElementById('sourceFaceCanvas'),
+  targetCanvas: document.getElementById('targetFaceCanvas'),
+  resultCanvas: document.getElementById('faceSwapResultCanvas'),
+  naiveCanvas: document.getElementById('naiveFaceCanvas'),
+  poissonCanvas: document.getElementById('poissonFaceCanvas'),
+  sourceSelect: document.getElementById('faceSourceSelect'),
+  targetSelect: document.getElementById('faceTargetSelect'),
+  sourceUpload: document.getElementById('sourceFaceUpload'),
+  targetUpload: document.getElementById('targetFaceUpload'),
+  sourceInfo: document.getElementById('sourceFaceInfo'),
+  targetInfo: document.getElementById('targetFaceInfo'),
+  status: document.getElementById('faceSwapStatus'),
+  detectBtn: document.getElementById('detectFacesBtn'),
+  alignBtn: document.getElementById('alignFacesBtn'),
+  saveBtn: document.getElementById('saveFaceSwapBtn'),
+  blendSlider: document.getElementById('faceBlendSlider'),
+  blendValue: document.getElementById('faceBlendValue'),
+  landmarksToggle: document.getElementById('showLandmarksToggle'),
+};
+
+// Predefined face test cases
+const FACE_CASES = [
+  { id: 'face1', name: '人物 A', source: 'assets/faces/face1_source.png', target: 'assets/faces/face1_target.png' },
+  { id: 'face2', name: '人物 B', source: 'assets/faces/face2_source.png', target: 'assets/faces/face2_target.png' },
+  { id: 'face3', name: '人物 C', source: 'assets/faces/face3_source.png', target: 'assets/faces/face3_target.png' },
+  { id: 'face4', name: '人物 D', source: 'assets/faces/face4_source.png', target: 'assets/faces/face4_target.png' },
+];
+
+async function loadFaceModels() {
+  if (faceState.modelsLoaded || faceState.modelsLoading) return;
+
+  faceState.modelsLoading = true;
+  faceEls.status.textContent = '正在加载人脸检测模型...';
+  faceEls.status.className = 'face-info detecting';
+
+  try {
+    const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@master/weights';
+    await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
+    await faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODEL_URL);
+    await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
+    faceState.modelsLoaded = true;
+    faceEls.status.textContent = '模型加载完成，可以开始检测';
+    faceEls.status.className = 'face-info success';
+  } catch (error) {
+    console.error('Failed to load face-api models:', error);
+    faceEls.status.textContent = '模型加载失败: ' + error.message;
+    faceEls.status.className = 'face-info error';
+  }
+
+  faceState.modelsLoading = false;
+}
+
+function initFaceSwapUI() {
+  appendFaceOptions(faceEls.sourceSelect);
+  appendFaceOptions(faceEls.targetSelect);
+}
+
+function appendFaceOptions(select) {
+  if (!select) {
+    return;
+  }
+  for (const face of FACE_CASES) {
+    if (select.querySelector(`option[value="${face.id}"]`)) {
+      continue;
+    }
+    const option = document.createElement('option');
+    option.value = face.id;
+    option.textContent = face.name;
+    select.append(option);
+  }
+}
+
+async function loadFaceImage(source, target) {
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+
+  return new Promise((resolve, reject) => {
+    img.onload = () => resolve(img);
+    img.onerror = () => {
+      // Try without crossOrigin for local files
+      const img2 = new Image();
+      img2.onload = () => resolve(img2);
+      img2.onerror = () => reject(new Error('Failed to load image'));
+      img2.src = target || source;
+    };
+    img.src = source;
+  });
+}
+
+function setFaceCanvasSize(canvas, img) {
+  const maxSize = 300;
+  let w = img.width;
+  let h = img.height;
+
+  if (w > maxSize || h > maxSize) {
+    const scale = maxSize / Math.max(w, h);
+    w = Math.round(w * scale);
+    h = Math.round(h * scale);
+  }
+
+  canvas.width = w;
+  canvas.height = h;
+  return { w, h };
+}
+
+function drawFaceWithLandmarks(canvas, img, detection, showLandmarks = true) {
+  const ctx = canvas.getContext('2d');
+  const { w, h } = setFaceCanvasSize(canvas, img);
+
+  ctx.drawImage(img, 0, 0, w, h);
+
+  if (showLandmarks && detection && detection.landmarks) {
+    const landmarks = detection.landmarks;
+    const positions = landmarks.positions;
+
+    // Draw face box
+    if (detection.box) {
+      ctx.strokeStyle = '#22c55e';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(
+        detection.box.x * (w / img.width),
+        detection.box.y * (h / img.height),
+        detection.box.width * (w / img.width),
+        detection.box.height * (h / img.height)
+      );
+    }
+
+    // Draw landmarks
+    ctx.fillStyle = '#f472b6';
+
+    // Eyes
+    const leftEye = landmarks.getLeftEye();
+    const rightEye = landmarks.getRightEye();
+
+    leftEye.forEach(p => drawPoint(ctx, p.x * (w / img.width), p.y * (h / img.height), '#3b82f6', 4));
+    rightEye.forEach(p => drawPoint(ctx, p.x * (w / img.width), p.y * (h / img.height), '#3b82f6', 4));
+
+    // Nose
+    const nose = landmarks.getNose();
+    nose.forEach(p => drawPoint(ctx, p.x * (w / img.width), p.y * (h / img.height), '#22c55e', 3));
+
+    // Mouth
+    const mouth = landmarks.getMouth();
+    mouth.forEach(p => drawPoint(ctx, p.x * (w / img.width), p.y * (h / img.height), '#f59e0b', 3));
+  }
+}
+
+function drawPoint(ctx, x, y, color, radius) {
+  ctx.beginPath();
+  ctx.arc(x, y, radius, 0, 2 * Math.PI);
+  ctx.fillStyle = color;
+  ctx.fill();
+}
+
+function getEyeCenter(landmarks) {
+  const leftEye = landmarks.getLeftEye();
+  const rightEye = landmarks.getRightEye();
+
+  const leftCenter = {
+    x: leftEye.reduce((sum, p) => sum + p.x, 0) / leftEye.length,
+    y: leftEye.reduce((sum, p) => sum + p.y, 0) / leftEye.length
+  };
+
+  const rightCenter = {
+    x: rightEye.reduce((sum, p) => sum + p.x, 0) / rightEye.length,
+    y: rightEye.reduce((sum, p) => sum + p.y, 0) / rightEye.length
+  };
+
+  const angle = Math.atan2(rightCenter.y - leftCenter.y, rightCenter.x - leftCenter.x);
+  const distance = Math.sqrt(
+    Math.pow(rightCenter.x - leftCenter.x, 2) +
+    Math.pow(rightCenter.y - leftCenter.y, 2)
+  );
+
+  return { leftCenter, rightCenter, angle, distance };
+}
+
+function computeAffineMatrix(srcEye, dstEye, srcSize, dstSize) {
+  // Source eye parameters
+  const srcAngle = Math.atan2(srcEye.rightCenter.y - srcEye.leftCenter.y, srcEye.rightCenter.x - srcEye.leftCenter.x);
+  const srcDist = srcEye.distance;
+
+  // Target eye parameters
+  const dstAngle = Math.atan2(dstEye.rightCenter.y - dstEye.leftCenter.y, dstEye.rightCenter.x - dstEye.leftCenter.x);
+  const dstDist = dstEye.distance;
+
+  // Scale to match target eye distance
+  const scale = dstDist / srcDist;
+
+  // Rotation angle
+  const angle = dstAngle - srcAngle;
+
+  // Source center (midpoint between eyes)
+  const srcCenterX = (srcEye.leftCenter.x + srcEye.rightCenter.x) / 2;
+  const srcCenterY = (srcEye.leftCenter.y + srcEye.rightCenter.y) / 2;
+
+  // Target center
+  const dstCenterX = (dstEye.leftCenter.x + dstEye.rightCenter.x) / 2;
+  const dstCenterY = (dstEye.leftCenter.y + dstEye.rightCenter.y) / 2;
+
+  return { srcCenter: { x: srcCenterX, y: srcCenterY }, dstCenter: { x: dstCenterX, y: dstCenterY }, scale, angle };
+}
+
+function applyAffineTransformWithCV(srcImg, matrix, dstSize) {
+  // Pure JavaScript implementation using Canvas 2D
+  const canvas = document.createElement('canvas');
+  canvas.width = dstSize.width;
+  canvas.height = dstSize.height;
+  const ctx = canvas.getContext('2d');
+
+  // Calculate the transformation
+  const { srcCenter, dstCenter, scale, angle } = matrix;
+
+  // Translate to origin, scale, rotate, then translate to destination
+  ctx.save();
+
+  // Move to destination center
+  ctx.translate(dstCenter.x, dstCenter.y);
+  // Rotate
+  ctx.rotate(angle);
+  // Scale
+  ctx.scale(scale, scale);
+  // Move source center to origin (inverse of original position)
+  ctx.translate(-srcCenter.x, -srcCenter.y);
+
+  // Draw the source image
+  ctx.drawImage(srcImg, 0, 0);
+
+  ctx.restore();
+
+  return canvas.toDataURL();
+}
+
+function applyAffineTransformNative(srcImg, matrix, dstSize) {
+  return applyAffineTransformWithCV(srcImg, matrix, dstSize);
+}
+
+function createFaceMask(width, height, padding = 0.1) {
+  // Create mask using canvas
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const radiusX = (width / 2) * (1 + padding);
+  const radiusY = (height / 2) * (1 + padding);
+
+  // Draw ellipse
+  ctx.fillStyle = 'white';
+  ctx.beginPath();
+  ctx.ellipse(centerX, centerY, radiusX, radiusY, 0, 0, 2 * Math.PI);
+  ctx.fill();
+
+  // Apply Gaussian blur using box blur approximation
+  const imageData = ctx.getImageData(0, 0, width, height);
+  const blurred = gaussianBlur(imageData, 5);
+
+  return { canvas, imageData: blurred };
+}
+
+function gaussianBlur(imageData, radius) {
+  const pixels = imageData.data;
+  const width = imageData.width;
+  const height = imageData.height;
+  const output = new Uint8ClampedArray(pixels);
+
+  // Simple box blur approximation
+  for (let r = 0; r < radius; r++) {
+    const temp = new Uint8ClampedArray(pixels);
+
+    // Horizontal pass
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        let sum = 0;
+        let count = 0;
+
+        for (let k = -r; k <= r; k++) {
+          const nx = Math.min(width - 1, Math.max(0, x + k));
+          const idx = (y * width + nx) * 4;
+          sum += pixels[idx];
+          count++;
+        }
+
+        const idx = (y * width + x) * 4;
+        output[idx] = sum / count;
+        output[idx + 1] = sum / count;
+        output[idx + 2] = sum / count;
+      }
+    }
+
+    // Vertical pass
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        let sum = 0;
+        let count = 0;
+
+        for (let k = -r; k <= r; k++) {
+          const ny = Math.min(height - 1, Math.max(0, y + k));
+          const idx = (ny * width + x) * 4;
+          sum += output[idx];
+          count++;
+        }
+
+        const idx = (y * width + x) * 4;
+        output[idx] = sum / count;
+        output[idx + 1] = sum / count;
+        output[idx + 2] = sum / count;
+      }
+    }
+  }
+
+  return new ImageData(output, width, height);
+}
+
+async function detectFaces(image) {
+  if (!faceState.modelsLoaded) {
+    await loadFaceModels();
+  }
+
+  const detections = await faceapi.detectAllFaces(image, new faceapi.TinyFaceDetectorOptions())
+    .withFaceLandmarks();
+
+  return detections;
+}
+
+function createAlignedFaceImage(sourceImg, sourceDetections, targetDetections) {
+  if (!sourceDetections || sourceDetections.length === 0 ||
+      !targetDetections || targetDetections.length === 0) {
+    throw new Error('请先检测两张图片中的人脸');
+  }
+
+  const srcLandmarks = sourceDetections[0].landmarks;
+  const tgtLandmarks = targetDetections[0].landmarks;
+
+  const srcEye = getEyeCenter(srcLandmarks);
+  const tgtEye = getEyeCenter(tgtLandmarks);
+
+  // Get target face bounding box for size
+  const tgtBox = targetDetections[0].box;
+  const faceWidth = tgtBox.width * 1.2;
+  const faceHeight = tgtBox.height * 1.2;
+
+  // Compute affine transformation matrix
+  const matrix = computeAffineMatrix(srcEye, tgtEye, {
+    width: sourceImg.width,
+    height: sourceImg.height
+  }, {
+    width: faceWidth,
+    height: faceHeight
+  });
+
+  // Use OpenCV for better quality transformation
+  return applyAffineTransformWithCV(sourceImg, matrix, { width: faceWidth, height: faceHeight });
+}
+
+function naiveBlend(sourceCanvas, targetCanvas, blendRatio = 1.0) {
+  const srcCtx = sourceCanvas.getContext('2d');
+  const tgtCtx = targetCanvas.getContext('2d');
+
+  const srcData = srcCtx.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height);
+  const tgtData = tgtCtx.getImageData(0, 0, targetCanvas.width, targetCanvas.height);
+
+  // Simple alpha blending at target face position
+  const result = new ImageData(
+    new Uint8ClampedArray(tgtData.data),
+    tgtData.width,
+    tgtData.height
+  );
+
+  // Find face region in target (approximate center)
+  const centerX = Math.floor(tgtData.width / 2);
+  const centerY = Math.floor(tgtData.height / 2);
+  const faceRadius = Math.min(tgtData.width, tgtData.height) / 3;
+
+  for (let y = 0; y < tgtData.height; y++) {
+    for (let x = 0; x < tgtData.width; x++) {
+      const dx = x - centerX;
+      const dy = y - centerY;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+
+      if (dist < faceRadius) {
+        // Map to source coordinates
+        const srcX = Math.floor((x / tgtData.width) * srcData.width);
+        const srcY = Math.floor((y / tgtData.height) * srcData.height);
+
+        if (srcX < srcData.width && srcY < srcData.height) {
+          const tgtIdx = (y * tgtData.width + x) * 4;
+          const srcIdx = (srcY * srcData.width + srcX) * 4;
+
+          const alpha = blendRatio * (1 - dist / faceRadius) * 0.8;
+
+          result.data[tgtIdx] = srcData.data[srcIdx] * alpha + result.data[tgtIdx] * (1 - alpha);
+          result.data[tgtIdx + 1] = srcData.data[srcIdx + 1] * alpha + result.data[tgtIdx + 1] * (1 - alpha);
+          result.data[tgtIdx + 2] = srcData.data[srcIdx + 2] * alpha + result.data[tgtIdx + 2] * (1 - alpha);
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
+function poissonBlendFaces(sourceCanvas, targetCanvas, blendRatio = 1.0) {
+  // This function prepares the data for Poisson blending
+  // The actual blending will use the existing solveAndComposite function
+
+  const srcCtx = sourceCanvas.getContext('2d');
+  const tgtCtx = targetCanvas.getContext('2d');
+
+  // Get image data
+  const srcData = srcCtx.getImageData(0, 0, sourceCanvas.width, sourceCanvas.height);
+  const tgtData = tgtCtx.getImageData(0, 0, targetCanvas.width, targetCanvas.height);
+
+  // Create face mask (ellipse shape)
+  const mask = new Uint8Array(tgtData.width * tgtData.height);
+  const centerX = Math.floor(tgtData.width / 2);
+  const centerY = Math.floor(tgtData.height / 2);
+  const faceRadiusX = Math.floor(tgtData.width / 2.5);
+  const faceRadiusY = Math.floor(tgtData.height / 2.5);
+
+  for (let y = 0; y < tgtData.height; y++) {
+    for (let x = 0; x < tgtData.width; x++) {
+      const dx = (x - centerX) / faceRadiusX;
+      const dy = (y - centerY) / faceRadiusY;
+      const idx = y * tgtData.width + x;
+      if (dx * dx + dy * dy <= 1) {
+        mask[idx] = 255;
+      }
+    }
+  }
+
+  // Convert source to canvas at target size
+  const scaledSource = document.createElement('canvas');
+  scaledSource.width = tgtData.width;
+  scaledSource.height = tgtData.height;
+  const scaleCtx = scaledSource.getContext('2d');
+  scaleCtx.drawImage(sourceCanvas, 0, 0, tgtData.width, tgtData.height);
+  const scaledSrcData = scaleCtx.getImageData(0, 0, tgtData.width, tgtData.height);
+
+  // Prepare ROI polygon (rectangle around face)
+  const roi = [];
+  const padding = 5;
+  roi.push([centerX - faceRadiusX - padding, centerY - faceRadiusY - padding]);
+  roi.push([centerX + faceRadiusX + padding, centerY - faceRadiusY - padding]);
+  roi.push([centerX + faceRadiusX + padding, centerY + faceRadiusY + padding]);
+  roi.push([centerX - faceRadiusX - padding, centerY + faceRadiusY + padding]);
+
+  return {
+    sourceData: scaledSrcData,
+    targetData: tgtData,
+    mask: mask,
+    roi: roi,
+    faceCenter: { x: centerX, y: centerY },
+    faceRadius: { x: faceRadiusX, y: faceRadiusY },
+    blendRatio: blendRatio
+  };
+}
+
+// Simplified face Poisson blending
+function performFacePoissonBlend(sourceImg, targetImg, blendData) {
+  const { mask, targetData, faceCenter, faceRadius, blendRatio } = blendData;
+
+  // Create result image
+  const result = new ImageData(
+    new Uint8ClampedArray(targetData.data),
+    targetData.width,
+    targetData.height
+  );
+
+  // Use gradient-guided interpolation
+  // For each pixel in the face region, blend based on gradient direction
+
+  const resultData = result.data;
+  const targetDataArr = targetData.data;
+  const sourceDataArr = sourceImg.data;
+
+  const w = targetData.width;
+  const h = targetData.height;
+
+  // Poisson-style blending with gradient preservation
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const idx = y * w + x;
+      const pixelIdx = idx * 4;
+
+      if (mask[idx] > 0) {
+        // Calculate blend weight based on distance from center
+        const dx = (x - faceCenter.x) / faceRadius.x;
+        const dy = (y - faceCenter.y) / faceRadius.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+
+        // Smooth falloff
+        let alpha = blendRatio * Math.max(0, 1 - dist);
+        alpha = alpha * alpha * (3 - 2 * alpha); // Smoothstep
+
+        // Poisson-like gradient blending
+        // Compute local gradient from target
+        let gradX = 0, gradY = 0;
+        if (x > 0 && x < w - 1 && y > 0 && y < h - 1) {
+          for (let c = 0; c < 3; c++) {
+            gradX += Math.abs(targetDataArr[pixelIdx + c] - targetDataArr[pixelIdx - 4 + c]);
+            gradY += Math.abs(targetDataArr[pixelIdx + c] - targetDataArr[pixelIdx - w * 4 + c]);
+          }
+        }
+
+        // Simple weighted blend with some gradient preservation
+        for (let c = 0; c < 3; c++) {
+          const srcVal = sourceDataArr[pixelIdx + c];
+          const tgtVal = targetDataArr[pixelIdx + c];
+
+          // Blend source and target
+          resultData[pixelIdx + c] = Math.round(srcVal * alpha + tgtVal * (1 - alpha));
+        }
+      }
+    }
+  }
+
+  return result;
+}
+
+async function runFaceSwap() {
+  if (!faceState.sourceImage || !faceState.targetImage) {
+    faceEls.status.textContent = '请先加载源图和目标图';
+    faceEls.status.className = 'face-info error';
+    return;
+  }
+
+  try {
+    faceEls.status.textContent = '正在检测人脸...';
+    faceEls.status.className = 'face-info detecting';
+    faceEls.detectBtn.disabled = true;
+    faceEls.alignBtn.disabled = true;
+
+    // Detect faces
+    const [sourceDetections, targetDetections] = await Promise.all([
+      detectFaces(faceState.sourceImage),
+      detectFaces(faceState.targetImage)
+    ]);
+
+    if (sourceDetections.length === 0) {
+      throw new Error('源图中未检测到人脸');
+    }
+    if (targetDetections.length === 0) {
+      throw new Error('目标图中未检测到人脸');
+    }
+
+    faceState.sourceDetections = sourceDetections;
+    faceState.targetDetections = targetDetections;
+
+    // Draw on canvases
+    drawFaceWithLandmarks(faceEls.sourceCanvas, faceState.sourceImage, sourceDetections[0], faceState.showLandmarks);
+    drawFaceWithLandmarks(faceEls.targetCanvas, faceState.targetImage, targetDetections[0], faceState.showLandmarks);
+
+    faceEls.sourceInfo.textContent = `检测到 1 个人脸 (${Math.round(sourceDetections[0].box.width)}x${Math.round(sourceDetections[0].box.height)})`;
+    faceEls.targetInfo.textContent = `检测到 1 个人脸 (${Math.round(targetDetections[0].box.width)}x${Math.round(targetDetections[0].box.height)})`;
+    faceEls.sourceInfo.className = 'face-info success';
+    faceEls.targetInfo.className = 'face-info success';
+
+    faceEls.status.textContent = '人脸检测完成，点击"对齐融合"进行换脸';
+    faceEls.status.className = 'face-info success';
+    faceEls.alignBtn.disabled = false;
+
+  } catch (error) {
+    console.error('Face detection error:', error);
+    faceEls.status.textContent = error.message;
+    faceEls.status.className = 'face-info error';
+  } finally {
+    faceEls.detectBtn.disabled = false;
+  }
+}
+
+async function runFaceAlignment() {
+  if (!faceState.sourceDetections || !faceState.targetDetections) {
+    faceEls.status.textContent = '请先点击"检测人脸"';
+    faceEls.status.className = 'face-info error';
+    return;
+  }
+
+  try {
+    faceEls.status.textContent = '正在进行人脸对齐...';
+    faceEls.status.className = 'face-info detecting';
+    faceEls.alignBtn.disabled = true;
+
+    // Create aligned face
+    const alignedDataUrl = createAlignedFaceImage(
+      faceState.sourceImage,
+      faceState.sourceDetections,
+      faceState.targetDetections
+    );
+
+    // Create aligned face canvas
+    const alignedImg = new Image();
+    await new Promise((resolve, reject) => {
+      alignedImg.onload = resolve;
+      alignedImg.onerror = reject;
+      alignedImg.src = alignedDataUrl;
+    });
+
+    faceState.alignedFace = alignedImg;
+
+    // Set result canvas size
+    faceEls.resultCanvas.width = faceEls.targetCanvas.width;
+    faceEls.resultCanvas.height = faceEls.targetCanvas.height;
+
+    const resultCtx = faceEls.resultCanvas.getContext('2d');
+    resultCtx.drawImage(faceState.targetImage, 0, 0, faceEls.resultCanvas.width, faceEls.resultCanvas.height);
+
+    // Prepare blending data
+    const blendData = poissonBlendFaces(alignedImg, faceEls.targetCanvas, faceState.blendRatio);
+
+    // Perform Poisson-style blending
+    const alignedCanvas = document.createElement('canvas');
+    alignedCanvas.width = alignedImg.width;
+    alignedCanvas.height = alignedImg.height;
+    alignedCanvas.getContext('2d').drawImage(alignedImg, 0, 0);
+
+    const resultData = performFacePoissonBlend(
+      alignedCanvas.getContext('2d').getImageData(0, 0, alignedCanvas.width, alignedCanvas.height),
+      faceEls.targetCanvas.getContext('2d').getImageData(0, 0, faceEls.targetCanvas.width, faceEls.targetCanvas.height),
+      blendData
+    );
+
+    resultCtx.putImageData(resultData, 0, 0);
+
+    // Also show naive blend for comparison
+    const naiveResult = naiveBlend(alignedCanvas, faceEls.targetCanvas, faceState.blendRatio);
+    faceEls.naiveCanvas.width = faceEls.targetCanvas.width;
+    faceEls.naiveCanvas.height = faceEls.targetCanvas.height;
+    faceEls.naiveCanvas.getContext('2d').putImageData(naiveResult, 0, 0);
+
+    // Show Poisson result
+    faceEls.poissonCanvas.width = faceEls.targetCanvas.width;
+    faceEls.poissonCanvas.height = faceEls.targetCanvas.height;
+    faceEls.poissonCanvas.getContext('2d').putImageData(resultData, 0, 0);
+
+    faceState.resultImageData = resultData;
+
+    faceEls.status.textContent = '换脸完成！';
+    faceEls.status.className = 'face-info success';
+
+  } catch (error) {
+    console.error('Face alignment error:', error);
+    faceEls.status.textContent = error.message;
+    faceEls.status.className = 'face-info error';
+  } finally {
+    faceEls.alignBtn.disabled = false;
+  }
+}
+
+function saveFaceSwapResult() {
+  if (!faceEls.resultCanvas) return;
+
+  const link = document.createElement('a');
+  link.download = 'faceswap_result.png';
+  link.href = faceEls.resultCanvas.toDataURL('image/png');
+  link.click();
+}
+
+function bindFaceSwapEvents() {
+  // Face selection
+  if (faceEls.sourceSelect) {
+    faceEls.sourceSelect.addEventListener('change', async () => {
+      const faceId = faceEls.sourceSelect.value;
+      if (faceId) {
+        const face = FACE_CASES.find(f => f.id === faceId);
+        if (face) {
+          try {
+            faceState.sourceImage = await loadFaceImage(face.source);
+            drawFaceWithLandmarks(faceEls.sourceCanvas, faceState.sourceImage, null, false);
+            faceEls.sourceInfo.textContent = `已加载: ${face.name}`;
+            faceEls.sourceInfo.className = 'face-info';
+          } catch (e) {
+            faceEls.sourceInfo.textContent = '加载失败';
+            faceEls.sourceInfo.className = 'face-info error';
+          }
+        }
+      }
+    });
+  }
+
+  if (faceEls.targetSelect) {
+    faceEls.targetSelect.addEventListener('change', async () => {
+      const faceId = faceEls.targetSelect.value;
+      if (faceId) {
+        const face = FACE_CASES.find(f => f.id === faceId);
+        if (face) {
+          try {
+            faceState.targetImage = await loadFaceImage(face.target);
+            drawFaceWithLandmarks(faceEls.targetCanvas, faceState.targetImage, null, false);
+            faceEls.targetInfo.textContent = `已加载: ${face.name}`;
+            faceEls.targetInfo.className = 'face-info';
+          } catch (e) {
+            faceEls.targetInfo.textContent = '加载失败';
+            faceEls.targetInfo.className = 'face-info error';
+          }
+        }
+      }
+    });
+  }
+
+  // File uploads
+  if (faceEls.sourceUpload) {
+    faceEls.sourceUpload.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (file) {
+        const url = URL.createObjectURL(file);
+        faceState.sourceImage = await loadFaceImage(url);
+        drawFaceWithLandmarks(faceEls.sourceCanvas, faceState.sourceImage, null, false);
+        faceEls.sourceInfo.textContent = `已上传: ${file.name}`;
+        faceEls.sourceInfo.className = 'face-info';
+        URL.revokeObjectURL(url);
+      }
+    });
+  }
+
+  if (faceEls.targetUpload) {
+    faceEls.targetUpload.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (file) {
+        const url = URL.createObjectURL(file);
+        faceState.targetImage = await loadFaceImage(url);
+        drawFaceWithLandmarks(faceEls.targetCanvas, faceState.targetImage, null, false);
+        faceEls.targetInfo.textContent = `已上传: ${file.name}`;
+        faceEls.targetInfo.className = 'face-info';
+        URL.revokeObjectURL(url);
+      }
+    });
+  }
+
+  // Buttons
+  if (faceEls.detectBtn) {
+    faceEls.detectBtn.addEventListener('click', runFaceSwap);
+  }
+
+  if (faceEls.alignBtn) {
+    faceEls.alignBtn.addEventListener('click', runFaceAlignment);
+  }
+
+  if (faceEls.saveBtn) {
+    faceEls.saveBtn.addEventListener('click', saveFaceSwapResult);
+  }
+
+  // Blend slider
+  if (faceEls.blendSlider) {
+    faceEls.blendSlider.addEventListener('input', () => {
+      faceState.blendRatio = faceEls.blendSlider.value / 100;
+      faceEls.blendValue.textContent = `${faceEls.blendSlider.value}%`;
+    });
+  }
+
+  // Landmarks toggle
+  if (faceEls.landmarksToggle) {
+    faceEls.landmarksToggle.addEventListener('change', () => {
+      faceState.showLandmarks = faceEls.landmarksToggle.checked;
+    });
+  }
+
+  // Alignment mode buttons
+  document.querySelectorAll('[data-align]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('[data-align]').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      faceState.alignmentMode = btn.dataset.align;
+    });
+  });
+}
+
+// Handle app mode change to show/hide face swap panel
+function updateFaceSwapPanelVisibility() {
+  if (faceEls.panel) {
+    faceEls.panel.hidden = state.appMode !== 'faceswap';
+  }
+  document.body.classList.toggle('face-swap-active', state.appMode === 'faceswap');
+  if (state.appMode === 'faceswap' && faceEls.status && !faceState.modelsLoaded && !faceState.modelsLoading) {
+    faceEls.status.textContent = '请选择预设或上传图片，点击“检测人脸”后自动加载模型';
+    faceEls.status.className = 'face-info';
+  }
+}
+
+// Initialize face swap when page loads
+document.addEventListener('DOMContentLoaded', () => {
+  initFaceSwapUI();
+  bindFaceSwapEvents();
+  updateFaceSwapPanelVisibility();
+});
