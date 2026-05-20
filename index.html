@@ -6,7 +6,6 @@
   <title>Poisson 图像融合交互工具</title>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/face-api.min.js"></script>
   <style>
     :root {
       --page-pad: clamp(16px, 2.2vw, 40px);
@@ -144,6 +143,13 @@
       color: var(--accent-strong);
       background: var(--surface);
       box-shadow: var(--shadow-soft);
+    }
+
+    .nav-link {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      text-decoration: none;
     }
 
     .hero {
@@ -1096,8 +1102,8 @@
     body {
       color: var(--ink);
       background:
-        radial-gradient(circle at 22% 10%, rgba(0, 166, 109, 0.14), transparent 24vw),
-        radial-gradient(circle at 82% 4%, rgba(255, 111, 89, 0.12), transparent 22vw),
+        linear-gradient(135deg, rgba(0, 166, 109, 0.12), transparent 32%),
+        linear-gradient(225deg, rgba(255, 111, 89, 0.1), transparent 34%),
         linear-gradient(90deg, rgba(16, 21, 15, 0.04) 1px, transparent 1px),
         linear-gradient(180deg, rgba(16, 21, 15, 0.04) 1px, transparent 1px),
         var(--bg);
@@ -1909,135 +1915,6 @@
       display: none !important;
     }
 
-    /* Face Swap Panel Styles */
-    .face-swap-panel {
-      grid-column: 1 / -1;
-      margin-top: 24px;
-      padding: 20px;
-      background: rgba(255, 255, 255, 0.92);
-      border: 1px solid var(--line);
-      border-radius: 12px;
-    }
-
-    .face-swap-panel .face-grid {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 16px;
-      margin-bottom: 20px;
-    }
-
-    .face-select {
-      padding: 4px 8px;
-      border: 1px solid var(--line);
-      border-radius: 4px;
-      font-size: 0.85rem;
-      background: var(--surface);
-      margin-left: auto;
-    }
-
-    .face-upload {
-      padding: 8px;
-      text-align: center;
-    }
-
-    .face-info {
-      padding: 8px 12px;
-      font-size: 0.8rem;
-      color: var(--muted);
-      text-align: center;
-      min-height: 40px;
-    }
-
-    .face-info.detecting {
-      color: var(--amber);
-    }
-
-    .face-info.success {
-      color: var(--accent);
-    }
-
-    .face-info.error {
-      color: var(--coral);
-    }
-
-    .face-actions {
-      display: flex;
-      gap: 8px;
-      padding: 12px;
-      justify-content: center;
-      flex-wrap: wrap;
-    }
-
-    .face-controls {
-      display: flex;
-      gap: 24px;
-      padding: 16px;
-      background: var(--surface-soft);
-      border-radius: 8px;
-      margin-bottom: 20px;
-      flex-wrap: wrap;
-      align-items: center;
-    }
-
-    .face-comparison {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 16px;
-    }
-
-    .face-comparison figure {
-      text-align: center;
-      margin: 0;
-    }
-
-    .face-comparison figcaption {
-      padding: 8px;
-      font-weight: 600;
-      color: var(--muted-strong);
-    }
-
-    .face-comparison canvas {
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      max-width: 100%;
-    }
-
-    #faceSwapStatus {
-      font-weight: 500;
-    }
-
-    .face-swap-active #tool-section .tool-grid > .panel:not(.controls-panel) {
-      display: none;
-    }
-
-    .face-swap-active #tool-section .tool-grid {
-      grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
-    }
-
-    .face-swap-active .controls-panel {
-      grid-column: 1;
-    }
-
-    .face-swap-active .face-swap-panel {
-      grid-column: 2;
-      margin-top: 0;
-    }
-
-    @media (max-width: 900px) {
-      .face-swap-active #tool-section .tool-grid,
-      .face-swap-panel .face-grid {
-        grid-template-columns: 1fr;
-      }
-
-      .face-swap-active .controls-panel,
-      .face-swap-active .face-swap-panel {
-        grid-column: 1;
-      }
-
-      .face-comparison {
-        grid-template-columns: 1fr;
-      }
-    }
   </style>
 </head>
 <body>
@@ -2050,6 +1927,7 @@
       <div class="nav-tabs">
         <button class="nav-tab active" data-tab="tool">交互工具</button>
         <button class="nav-tab" data-tab="analysis">实验分析</button>
+        <a class="nav-tab nav-link" href="faceswap.html">人脸融合</a>
       </div>
     </div>
   </nav>
@@ -2061,6 +1939,7 @@
       <p class="hero-lede">把图像边界交给泊松方程，选区、纹理和结果在滚动中逐层靠近。页面保留完整工作台，同时加入类似 Editions 的大字号、吸附式媒体和滑动缩放节奏。</p>
       <div class="hero-actions" aria-label="页面入口">
         <a class="hero-link primary" href="#tool-section">进入工作台</a>
+        <a class="hero-link" href="faceswap.html">人脸融合小页面</a>
         <a class="hero-link" href="#analysis-section" data-open-analysis>查看实验分析</a>
       </div>
     </div>
@@ -2215,7 +2094,6 @@
             <option value="clone">Seamless Cloning</option>
             <option value="inpaint">Poisson 修复</option>
             <option value="texture">纹理压平</option>
-            <option value="faceswap">人脸融合</option>
           </select>
         </div>
 
@@ -2306,109 +2184,6 @@
         </div>
       </div>
 
-      <!-- Face Swap Panel (hidden by default) -->
-      <div class="face-swap-panel" id="faceSwapPanel" hidden>
-        <div class="face-grid">
-          <!-- Source Face -->
-          <div class="panel">
-            <div class="panel-header">
-              <span class="panel-title">源人脸（将被替换）</span>
-              <select id="faceSourceSelect" class="face-select">
-                <option value="">选择预设...</option>
-                <option value="face1">人物 A</option>
-                <option value="face2">人物 B</option>
-                <option value="face3">人物 C</option>
-                <option value="face4">人物 D</option>
-              </select>
-            </div>
-            <div class="canvas-wrap">
-              <canvas id="sourceFaceCanvas"></canvas>
-            </div>
-            <div class="face-upload">
-              <input type="file" id="sourceFaceUpload" accept="image/*" hidden>
-              <button type="button" class="btn" onclick="document.getElementById('sourceFaceUpload').click()">上传图片</button>
-            </div>
-            <div class="face-info" id="sourceFaceInfo"></div>
-          </div>
-
-          <!-- Target Face -->
-          <div class="panel">
-            <div class="panel-header">
-              <span class="panel-title">目标人脸（接收换脸）</span>
-              <select id="faceTargetSelect" class="face-select">
-                <option value="">选择预设...</option>
-                <option value="face1">人物 A</option>
-                <option value="face2">人物 B</option>
-                <option value="face3">人物 C</option>
-                <option value="face4">人物 D</option>
-              </select>
-            </div>
-            <div class="canvas-wrap">
-              <canvas id="targetFaceCanvas"></canvas>
-            </div>
-            <div class="face-upload">
-              <input type="file" id="targetFaceUpload" accept="image/*" hidden>
-              <button type="button" class="btn" onclick="document.getElementById('targetFaceUpload').click()">上传图片</button>
-            </div>
-            <div class="face-info" id="targetFaceInfo"></div>
-          </div>
-
-          <!-- Result -->
-          <div class="panel">
-            <div class="panel-header">
-              <span class="panel-title">换脸结果</span>
-            </div>
-            <div class="canvas-wrap">
-              <canvas id="faceSwapResultCanvas"></canvas>
-            </div>
-            <div class="face-actions">
-              <button type="button" id="detectFacesBtn" class="btn primary">检测人脸</button>
-              <button type="button" id="alignFacesBtn" class="btn primary" disabled>对齐融合</button>
-              <button type="button" id="saveFaceSwapBtn" class="btn">保存结果</button>
-            </div>
-            <div class="face-info" id="faceSwapStatus"></div>
-          </div>
-        </div>
-
-        <!-- Face Swap Controls -->
-        <div class="face-controls">
-          <div class="control-group">
-            <label class="control-label">融合程度</label>
-            <div class="range-wrap">
-              <input type="range" id="faceBlendSlider" min="0" max="100" step="5" value="100">
-              <span class="range-value" id="faceBlendValue">100%</span>
-            </div>
-          </div>
-          <div class="control-group">
-            <label class="control-label">对齐方式</label>
-            <div class="segmented">
-              <button type="button" data-align="eyes" class="active">眼睛对齐</button>
-              <button type="button" data-align="landmarks">特征点对齐</button>
-            </div>
-          </div>
-          <div class="control-group">
-            <label class="control-label">显示检测</label>
-            <div class="toggle-row">
-              <label class="toggle">
-                <input type="checkbox" id="showLandmarksToggle" checked>
-                <span class="toggle-slider"></span>
-              </label>
-            </div>
-          </div>
-        </div>
-
-        <!-- Face Comparison -->
-        <div class="face-comparison" id="faceComparison">
-          <figure>
-            <figcaption>直接混合</figcaption>
-            <canvas id="naiveFaceCanvas"></canvas>
-          </figure>
-          <figure>
-            <figcaption>Poisson 融合</figcaption>
-            <canvas id="poissonFaceCanvas"></canvas>
-          </figure>
-        </div>
-      </div>
     </div>
   </section>
 
