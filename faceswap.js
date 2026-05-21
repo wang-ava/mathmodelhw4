@@ -32,9 +32,11 @@ const MODEL_URLS = [
 ];
 
 const DISPLAY_MAX = 360;
+const FACE_FEATHER_RADIUS = 14;
+const POISSON_ITERATIONS = 280;
 const DETECTOR_OPTIONS = () => new faceapi.TinyFaceDetectorOptions({
-  inputSize: 224,
-  scoreThreshold: 0.32,
+  inputSize: 320,
+  scoreThreshold: 0.24,
 });
 
 const els = {
@@ -68,10 +70,11 @@ const state = {
   targetDetection: null,
   resultImageData: null,
   showLandmarks: true,
-  blendRatio: 0.9,
+  blendRatio: 0.82,
   scriptLoaded: false,
   modelsLoaded: false,
   loadingModels: false,
+  useTinyLandmarks: true,
 };
 
 init();
@@ -243,17 +246,19 @@ async function blendCurrentFaces() {
   try {
     const targetSize = drawImageToCanvas(els.resultCanvas, state.targetImage);
     const targetImageData = getCanvasData(els.resultCanvas);
+    const mask = createTargetFaceMask(targetSize);
     const alignedCanvas = alignSourceToTarget(targetSize);
     const alignedData = getCanvasData(alignedCanvas);
-    normalizeTransparentPixels(alignedData, targetImageData);
-    const mask = createTargetFaceMask(targetSize);
-    const direct = directBlend(targetImageData, alignedData, mask);
-    const poisson = poissonBlend(targetImageData, alignedData, mask);
+    trimMaskBySourceCoverage(mask, alignedData);
+    const matchedData = colorMatchSourceToTarget(alignedData, targetImageData, mask);
+    normalizeTransparentPixels(matchedData, targetImageData);
+    const direct = directBlend(targetImageData, matchedData, mask);
+    const poisson = poissonBlend(targetImageData, matchedData, mask);
     putCanvasData(els.directCanvas, direct);
     putCanvasData(els.poissonCanvas, poisson);
     putCanvasData(els.resultCanvas, poisson);
     state.resultImageData = poisson;
-    els.resultMeta.textContent = `${targetSize.width} x ${targetSize.height} · blend ${Math.round(state.blendRatio * 100)}%`;
+    els.resultMeta.textContent = `${targetSize.width} x ${targetSize.height} · warped mask · blend ${Math.round(state.blendRatio * 100)}%`;
     els.saveBtn.disabled = false;
     setStatus("融合完成。", "success");
   } catch (error) {
@@ -268,17 +273,22 @@ function alignSourceToTarget(targetSize) {
   canvas.width = targetSize.width;
   canvas.height = targetSize.height;
   const context = canvas.getContext("2d");
-  const sourceEye = getEyeInfo(state.sourceDetection.landmarks);
-  const targetEye = getEyeInfo(state.targetDetection.landmarks, targetSize.width / state.targetImage.naturalWidth);
-  const scale = targetEye.distance / sourceEye.distance;
-  const angle = targetEye.angle - sourceEye.angle;
-  context.save();
-  context.translate(targetEye.center.x, targetEye.center.y);
-  context.rotate(angle);
-  context.scale(scale, scale);
-  context.translate(-sourceEye.center.x, -sourceEye.center.y);
-  context.drawImage(state.sourceImage, 0, 0);
-  context.restore();
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+
+  const sourcePoints = getWarpPoints(state.sourceDetection.landmarks, 1);
+  const targetPoints = getWarpPoints(
+    state.targetDetection.landmarks,
+    targetSize.scale
+  );
+  const triangles = delaunayTriangulate(targetPoints);
+
+  for (const triangle of triangles) {
+    const sourceTriangle = triangle.map((index) => sourcePoints[index]);
+    const targetTriangle = triangle.map((index) => targetPoints[index]);
+    drawWarpedTriangle(context, state.sourceImage, sourceTriangle, targetTriangle);
+  }
+
   return canvas;
 }
 
@@ -302,24 +312,27 @@ function poissonBlend(targetImageData, sourceImageData, mask) {
   const height = targetImageData.height;
   const hardMask = mask.hard;
   const softAlpha = mask.alpha;
-  const result = cloneImageData(targetImageData);
-  const work = result.data;
+  const work = new Float32Array(targetImageData.data.length);
   const source = sourceImageData.data;
   const target = targetImageData.data;
   const { minX, minY, maxX, maxY } = mask.bbox;
 
-  for (let i = 0; i < hardMask.length; i += 1) {
-    if (hardMask[i]) {
-      const p = i * 4;
-      work[p] = source[p];
-      work[p + 1] = source[p + 1];
-      work[p + 2] = source[p + 2];
-      work[p + 3] = 255;
-    }
+  if (minX > maxX || minY > maxY) {
+    return cloneImageData(targetImageData);
   }
 
-  const omega = 1.82;
-  const iterations = 120;
+  for (let p = 0; p < target.length; p += 4) {
+    const i = p / 4;
+    const fromSource = hardMask[i] && source[p + 3] > 8;
+    work[p] = fromSource ? source[p] : target[p];
+    work[p + 1] = fromSource ? source[p + 1] : target[p + 1];
+    work[p + 2] = fromSource ? source[p + 2] : target[p + 2];
+    work[p + 3] = 255;
+  }
+
+  const omega = 1.84;
+  const iterations = POISSON_ITERATIONS;
+  const sourceStrength = state.blendRatio;
   for (let iteration = 0; iteration < iterations; iteration += 1) {
     for (let y = Math.max(1, minY); y <= Math.min(height - 2, maxY); y += 1) {
       for (let x = Math.max(1, minX); x <= Math.min(width - 2, maxX); x += 1) {
@@ -331,22 +344,26 @@ function poissonBlend(targetImageData, sourceImageData, mask) {
         const neighbors = [index - 1, index + 1, index - width, index + width];
         for (let c = 0; c < 3; c += 1) {
           let boundarySum = 0;
-          let sourceNeighborSum = 0;
+          let guidanceSum = 0;
           for (const neighbor of neighbors) {
-            sourceNeighborSum += source[neighbor * 4 + c];
-            boundarySum += hardMask[neighbor] ? work[neighbor * 4 + c] : target[neighbor * 4 + c];
+            const np = neighbor * 4;
+            boundarySum += hardMask[neighbor] ? work[np + c] : target[np + c];
+            const sourceEdge = source[p + c] - source[np + c];
+            const targetEdge = target[p + c] - target[np + c];
+            guidanceSum += sourceEdge * sourceStrength + targetEdge * (1 - sourceStrength);
           }
-          const guidance = 4 * source[p + c] - sourceNeighborSum;
-          const next = (boundarySum + guidance) / 4;
-          work[p + c] = clampByte(work[p + c] + omega * (next - work[p + c]));
+          const next = (boundarySum + guidanceSum) / 4;
+          work[p + c] += omega * (next - work[p + c]);
         }
       }
     }
   }
 
+  matchSolutionToneToTarget(work, target, hardMask);
+
   const output = cloneImageData(targetImageData);
   for (let i = 0; i < softAlpha.length; i += 1) {
-    const alpha = softAlpha[i] * state.blendRatio;
+    const alpha = softAlpha[i];
     if (alpha <= 0) {
       continue;
     }
@@ -358,47 +375,155 @@ function poissonBlend(targetImageData, sourceImageData, mask) {
   return output;
 }
 
-function createTargetFaceMask(size) {
-  const scale = size.width / state.targetImage.naturalWidth;
-  const box = state.targetDetection.detection.box;
-  const centerX = (box.x + box.width / 2) * scale;
-  const centerY = (box.y + box.height * 0.53) * scale;
-  const radiusX = Math.max(18, box.width * 0.62 * scale);
-  const radiusY = Math.max(24, box.height * 0.78 * scale);
-  const alpha = new Float32Array(size.width * size.height);
-  const hard = new Uint8Array(size.width * size.height);
-  const bbox = {
-    minX: size.width,
-    minY: size.height,
-    maxX: 0,
-    maxY: 0,
-  };
+function matchSolutionToneToTarget(work, target, hardMask) {
+  const workSamples = [[], [], []];
+  const targetSamples = [[], [], []];
 
-  for (let y = 0; y < size.height; y += 1) {
-    for (let x = 0; x < size.width; x += 1) {
-      const dx = (x - centerX) / radiusX;
-      const dy = (y - centerY) / radiusY;
-      const distance = Math.sqrt(dx * dx + dy * dy);
-      if (distance <= 1.14) {
-        const index = y * size.width + x;
-        const edge = smoothstep(1.14, 0.82, distance);
-        alpha[index] = edge;
-        if (distance <= 0.96) {
-          hard[index] = 1;
-          bbox.minX = Math.min(bbox.minX, x);
-          bbox.minY = Math.min(bbox.minY, y);
-          bbox.maxX = Math.max(bbox.maxX, x);
-          bbox.maxY = Math.max(bbox.maxY, y);
-        }
-      }
+  for (let i = 0; i < hardMask.length; i += 1) {
+    if (!hardMask[i]) {
+      continue;
+    }
+    const p = i * 4;
+    const targetLum = luminance(target, p);
+    if (targetLum < 28 || targetLum > 245) {
+      continue;
+    }
+    for (let c = 0; c < 3; c += 1) {
+      workSamples[c].push(work[p + c]);
+      targetSamples[c].push(target[p + c]);
     }
   }
 
-  if (bbox.minX > bbox.maxX) {
-    bbox.minX = bbox.minY = bbox.maxX = bbox.maxY = 0;
+  if (workSamples[0].length < 32) {
+    return;
   }
 
+  const workStats = workSamples.map(robustStats);
+  const targetStats = targetSamples.map(robustStats);
+  const toneStrength = 0.72;
+  for (let i = 0; i < hardMask.length; i += 1) {
+    if (!hardMask[i]) {
+      continue;
+    }
+    const p = i * 4;
+    for (let c = 0; c < 3; c += 1) {
+      const ratio = Math.max(0.72, Math.min(1.36, targetStats[c].std / workStats[c].std));
+      const matched = (work[p + c] - workStats[c].mean) * ratio + targetStats[c].mean;
+      work[p + c] = work[p + c] * (1 - toneStrength) + matched * toneStrength;
+    }
+  }
+}
+
+function createTargetFaceMask(size) {
+  const scale = size.scale;
+  const contour = getFaceMaskContour(state.targetDetection.landmarks, scale);
+  return rasterizeFeatheredMask(size.width, size.height, contour, FACE_FEATHER_RADIUS);
+}
+
+function getFaceMaskContour(landmarks, scale) {
+  const jaw = landmarks.getJawOutline().map((point) => scalePoint(point, scale));
+  const brows = landmarks.getLeftEyeBrow()
+    .concat(landmarks.getRightEyeBrow())
+    .map((point) => scalePoint(point, scale));
+  const nose = landmarks.getNose().map((point) => scalePoint(point, scale));
+  const mouth = landmarks.getMouth().map((point) => scalePoint(point, scale));
+  const eyeInfo = getEyeInfo(landmarks, scale);
+  const noseBase = averagePoint(nose.slice(3, 6), 1);
+  const mouthCenter = averagePoint(mouth, 1);
+  const center = {
+    x: eyeInfo.center.x * 0.16 + noseBase.x * 0.58 + mouthCenter.x * 0.26,
+    y: eyeInfo.center.y * 0.2 + noseBase.y * 0.54 + mouthCenter.y * 0.26,
+  };
+  const faceWidth = Math.hypot(jaw[14].x - jaw[2].x, jaw[14].y - jaw[2].y);
+  const faceHeight = jaw[8].y - Math.min(...brows.map((point) => point.y));
+  const radiusX = Math.max(15, Math.min(faceWidth * 0.39, eyeInfo.distance * 1.02));
+  const radiusY = Math.max(20, faceHeight * 0.48);
+  return sampleRotatedEllipse(center, radiusX, radiusY, eyeInfo.angle, 40);
+}
+
+function sampleRotatedEllipse(center, radiusX, radiusY, angle, steps) {
+  const points = [];
+  const cosAngle = Math.cos(angle);
+  const sinAngle = Math.sin(angle);
+  for (let i = 0; i < steps; i += 1) {
+    const theta = (Math.PI * 2 * i) / steps;
+    const x = Math.cos(theta) * radiusX;
+    const y = Math.sin(theta) * radiusY;
+    points.push({
+      x: center.x + x * cosAngle - y * sinAngle,
+      y: center.y + x * sinAngle + y * cosAngle,
+    });
+  }
+  return points;
+}
+
+function rasterizeFeatheredMask(width, height, points, featherRadius) {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  context.fillStyle = "#fff";
+  context.beginPath();
+  points.forEach((point, index) => {
+    if (index === 0) {
+      context.moveTo(point.x, point.y);
+    } else {
+      context.lineTo(point.x, point.y);
+    }
+  });
+  context.closePath();
+  context.fill();
+
+  const data = context.getImageData(0, 0, width, height).data;
+  const hard = new Uint8Array(width * height);
+  const bbox = { minX: width, minY: height, maxX: -1, maxY: -1 };
+
+  for (let i = 0; i < hard.length; i += 1) {
+    if (data[i * 4 + 3] > 0) {
+      hard[i] = 1;
+      const x = i % width;
+      const y = Math.floor(i / width);
+      bbox.minX = Math.min(bbox.minX, x);
+      bbox.minY = Math.min(bbox.minY, y);
+      bbox.maxX = Math.max(bbox.maxX, x);
+      bbox.maxY = Math.max(bbox.maxY, y);
+    }
+  }
+
+  const alpha = blurMask(hard, width, height, featherRadius, 3);
   return { alpha, hard, bbox };
+}
+
+function trimMaskBySourceCoverage(mask, sourceImageData) {
+  const { hard, alpha, bbox } = mask;
+  bbox.minX = sourceImageData.width;
+  bbox.minY = sourceImageData.height;
+  bbox.maxX = -1;
+  bbox.maxY = -1;
+
+  for (let i = 0; i < hard.length; i += 1) {
+    const p = i * 4;
+    if (sourceImageData.data[p + 3] < 24) {
+      hard[i] = 0;
+      alpha[i] = 0;
+      continue;
+    }
+    if (hard[i]) {
+      const x = i % sourceImageData.width;
+      const y = Math.floor(i / sourceImageData.width);
+      bbox.minX = Math.min(bbox.minX, x);
+      bbox.minY = Math.min(bbox.minY, y);
+      bbox.maxX = Math.max(bbox.maxX, x);
+      bbox.maxY = Math.max(bbox.maxY, y);
+    }
+  }
+
+  if (bbox.maxX < bbox.minX || bbox.maxY < bbox.minY) {
+    bbox.minX = sourceImageData.width;
+    bbox.minY = sourceImageData.height;
+    bbox.maxX = -1;
+    bbox.maxY = -1;
+  }
 }
 
 async function loadModels() {
@@ -416,7 +541,13 @@ async function loadModels() {
     for (const modelUrl of MODEL_URLS) {
       try {
         await faceapi.nets.tinyFaceDetector.loadFromUri(modelUrl);
-        await faceapi.nets.faceLandmark68TinyNet.loadFromUri(modelUrl);
+        try {
+          await faceapi.nets.faceLandmark68Net.loadFromUri(modelUrl);
+          state.useTinyLandmarks = false;
+        } catch (landmarkError) {
+          await faceapi.nets.faceLandmark68TinyNet.loadFromUri(modelUrl);
+          state.useTinyLandmarks = true;
+        }
         state.modelsLoaded = true;
         return;
       } catch (error) {
@@ -483,7 +614,7 @@ function loadScript(src) {
 }
 
 async function detectSingleFace(image) {
-  return faceapi.detectSingleFace(image, DETECTOR_OPTIONS()).withFaceLandmarks(true);
+  return faceapi.detectSingleFace(image, DETECTOR_OPTIONS()).withFaceLandmarks(state.useTinyLandmarks);
 }
 
 function redrawDetectedCanvases() {
@@ -535,11 +666,398 @@ function getEyeInfo(landmarks, scale = 1) {
   return { left, right, center, angle, distance };
 }
 
+function getWarpPoints(landmarks, scale = 1) {
+  return landmarks.positions
+    .map((point) => scalePoint(point, scale))
+    .concat(getLiftedBrowPoints(landmarks, scale));
+}
+
+function getLiftedBrowPoints(landmarks, scale = 1) {
+  const jaw = landmarks.getJawOutline().map((point) => scalePoint(point, scale));
+  const brows = landmarks.getLeftEyeBrow()
+    .concat(landmarks.getRightEyeBrow())
+    .map((point) => scalePoint(point, scale));
+  const top = Math.min(...brows.map((point) => point.y));
+  const bottom = Math.max(...jaw.map((point) => point.y));
+  const lift = Math.max(4, (bottom - top) * 0.16);
+  return brows.map((point) => ({
+    x: point.x,
+    y: point.y - lift,
+  }));
+}
+
+function drawWarpedTriangle(context, image, sourceTriangle, targetTriangle) {
+  if (triangleArea(targetTriangle) < 0.05 || triangleArea(sourceTriangle) < 0.05) {
+    return;
+  }
+  const matrix = affineFromTriangles(sourceTriangle, targetTriangle);
+  const clipTriangle = expandTriangle(targetTriangle, 0.75);
+  context.save();
+  context.beginPath();
+  clipTriangle.forEach((point, index) => {
+    if (index === 0) {
+      context.moveTo(point.x, point.y);
+    } else {
+      context.lineTo(point.x, point.y);
+    }
+  });
+  context.closePath();
+  context.clip();
+  context.setTransform(matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f);
+  context.drawImage(image, 0, 0);
+  context.restore();
+}
+
+function expandTriangle(points, amount) {
+  const center = averagePoint(points, 1);
+  return points.map((point) => {
+    const dx = point.x - center.x;
+    const dy = point.y - center.y;
+    const length = Math.hypot(dx, dy) || 1;
+    return {
+      x: point.x + (dx / length) * amount,
+      y: point.y + (dy / length) * amount,
+    };
+  });
+}
+
+function triangleArea(points) {
+  return Math.abs(
+    (points[0].x * (points[1].y - points[2].y) +
+      points[1].x * (points[2].y - points[0].y) +
+      points[2].x * (points[0].y - points[1].y)) / 2
+  );
+}
+
+function getAlignmentTriangle(landmarks, scale = 1) {
+  const leftEye = averagePoint(landmarks.getLeftEye(), scale);
+  const rightEye = averagePoint(landmarks.getRightEye(), scale);
+  const nose = landmarks.getNose().map((point) => scalePoint(point, scale));
+  const mouth = landmarks.getMouth().map((point) => scalePoint(point, scale));
+  const noseBase = averagePoint(nose.slice(3, 6), 1);
+  const mouthCenter = averagePoint(mouth, 1);
+  const lowerAnchor = {
+    x: noseBase.x * 0.36 + mouthCenter.x * 0.64,
+    y: noseBase.y * 0.36 + mouthCenter.y * 0.64,
+  };
+  return [leftEye, rightEye, lowerAnchor];
+}
+
+function delaunayTriangulate(points) {
+  if (points.length < 3) {
+    return [];
+  }
+  const bounds = points.reduce((box, point) => ({
+    minX: Math.min(box.minX, point.x),
+    minY: Math.min(box.minY, point.y),
+    maxX: Math.max(box.maxX, point.x),
+    maxY: Math.max(box.maxY, point.y),
+  }), {
+    minX: Infinity,
+    minY: Infinity,
+    maxX: -Infinity,
+    maxY: -Infinity,
+  });
+  const width = bounds.maxX - bounds.minX;
+  const height = bounds.maxY - bounds.minY;
+  const delta = Math.max(width, height, 1) * 16;
+  const midX = (bounds.minX + bounds.maxX) / 2;
+  const midY = (bounds.minY + bounds.maxY) / 2;
+  const allPoints = points.concat([
+    { x: midX - delta, y: midY - delta },
+    { x: midX, y: midY + delta },
+    { x: midX + delta, y: midY - delta },
+  ]);
+  const superA = points.length;
+  const superB = points.length + 1;
+  const superC = points.length + 2;
+  let triangles = [makeTriangle(superA, superB, superC, allPoints)];
+
+  for (let pointIndex = 0; pointIndex < points.length; pointIndex += 1) {
+    const point = allPoints[pointIndex];
+    const badTriangles = triangles.filter((triangle) => circumcircleContains(triangle, point));
+    const polygon = [];
+
+    for (const triangle of badTriangles) {
+      addBoundaryEdge(polygon, triangle.a, triangle.b);
+      addBoundaryEdge(polygon, triangle.b, triangle.c);
+      addBoundaryEdge(polygon, triangle.c, triangle.a);
+    }
+
+    triangles = triangles.filter((triangle) => !badTriangles.includes(triangle));
+    for (const edge of polygon) {
+      const triangle = makeTriangle(edge[0], edge[1], pointIndex, allPoints);
+      if (Number.isFinite(triangle.radiusSq) && Math.abs(signedTriangleArea(triangle, allPoints)) > 0.01) {
+        triangles.push(triangle);
+      }
+    }
+  }
+
+  return triangles
+    .filter((triangle) => triangle.a < points.length && triangle.b < points.length && triangle.c < points.length)
+    .map((triangle) => [triangle.a, triangle.b, triangle.c]);
+}
+
+function makeTriangle(a, b, c, points) {
+  const p0 = points[a];
+  const p1 = points[b];
+  const p2 = points[c];
+  const denominator = 2 * (
+    p0.x * (p1.y - p2.y) +
+    p1.x * (p2.y - p0.y) +
+    p2.x * (p0.y - p1.y)
+  );
+
+  if (Math.abs(denominator) < 0.000001) {
+    return { a, b, c, x: 0, y: 0, radiusSq: Infinity };
+  }
+
+  const p0Sq = p0.x * p0.x + p0.y * p0.y;
+  const p1Sq = p1.x * p1.x + p1.y * p1.y;
+  const p2Sq = p2.x * p2.x + p2.y * p2.y;
+  const x = (
+    p0Sq * (p1.y - p2.y) +
+    p1Sq * (p2.y - p0.y) +
+    p2Sq * (p0.y - p1.y)
+  ) / denominator;
+  const y = (
+    p0Sq * (p2.x - p1.x) +
+    p1Sq * (p0.x - p2.x) +
+    p2Sq * (p1.x - p0.x)
+  ) / denominator;
+  return {
+    a,
+    b,
+    c,
+    x,
+    y,
+    radiusSq: (x - p0.x) * (x - p0.x) + (y - p0.y) * (y - p0.y),
+  };
+}
+
+function circumcircleContains(triangle, point) {
+  const dx = triangle.x - point.x;
+  const dy = triangle.y - point.y;
+  return dx * dx + dy * dy <= triangle.radiusSq + 0.01;
+}
+
+function addBoundaryEdge(edges, a, b) {
+  const reverseIndex = edges.findIndex((edge) => edge[0] === b && edge[1] === a);
+  if (reverseIndex >= 0) {
+    edges.splice(reverseIndex, 1);
+    return;
+  }
+  edges.push([a, b]);
+}
+
+function signedTriangleArea(triangle, points) {
+  const p0 = points[triangle.a];
+  const p1 = points[triangle.b];
+  const p2 = points[triangle.c];
+  return (
+    p0.x * (p1.y - p2.y) +
+    p1.x * (p2.y - p0.y) +
+    p2.x * (p0.y - p1.y)
+  ) / 2;
+}
+
+function affineFromTriangles(sourceTriangle, targetTriangle) {
+  const [s0, s1, s2] = sourceTriangle;
+  const [t0, t1, t2] = targetTriangle;
+  const denominator =
+    s0.x * (s1.y - s2.y) +
+    s1.x * (s2.y - s0.y) +
+    s2.x * (s0.y - s1.y);
+
+  if (Math.abs(denominator) < 0.0001) {
+    throw new Error("人脸关键点过于接近，无法稳定对齐。");
+  }
+
+  return {
+    a: (t0.x * (s1.y - s2.y) + t1.x * (s2.y - s0.y) + t2.x * (s0.y - s1.y)) / denominator,
+    b: (t0.y * (s1.y - s2.y) + t1.y * (s2.y - s0.y) + t2.y * (s0.y - s1.y)) / denominator,
+    c: (t0.x * (s2.x - s1.x) + t1.x * (s0.x - s2.x) + t2.x * (s1.x - s0.x)) / denominator,
+    d: (t0.y * (s2.x - s1.x) + t1.y * (s0.x - s2.x) + t2.y * (s1.x - s0.x)) / denominator,
+    e:
+      (t0.x * (s1.x * s2.y - s2.x * s1.y) +
+        t1.x * (s2.x * s0.y - s0.x * s2.y) +
+        t2.x * (s0.x * s1.y - s1.x * s0.y)) /
+      denominator,
+    f:
+      (t0.y * (s1.x * s2.y - s2.x * s1.y) +
+        t1.y * (s2.x * s0.y - s0.x * s2.y) +
+        t2.y * (s0.x * s1.y - s1.x * s0.y)) /
+      denominator,
+  };
+}
+
 function averagePoint(points, scale = 1) {
   return {
     x: points.reduce((sum, point) => sum + point.x, 0) / points.length * scale,
     y: points.reduce((sum, point) => sum + point.y, 0) / points.length * scale,
   };
+}
+
+function scalePoint(point, scale) {
+  return { x: point.x * scale, y: point.y * scale };
+}
+
+function colorMatchSourceToTarget(sourceImageData, targetImageData, mask) {
+  const output = cloneImageData(sourceImageData);
+  const source = sourceImageData.data;
+  const target = targetImageData.data;
+  const sourceSamples = [[], [], []];
+  const targetSamples = [[], [], []];
+
+  for (let i = 0; i < mask.hard.length; i += 1) {
+    const p = i * 4;
+    if (mask.alpha[i] < 0.62 || source[p + 3] < 24) {
+      continue;
+    }
+    const sourceLum = luminance(source, p);
+    const targetLum = luminance(target, p);
+    const sourceSpread = colorSpread(source, p);
+    const targetSpread = colorSpread(target, p);
+    if (sourceLum < 34 || targetLum < 34 || sourceLum > 242 || targetLum > 242) {
+      continue;
+    }
+    if ((sourceLum < 76 && sourceSpread > 72) || (targetLum < 76 && targetSpread > 72)) {
+      continue;
+    }
+    for (let c = 0; c < 3; c += 1) {
+      sourceSamples[c].push(source[p + c]);
+      targetSamples[c].push(target[p + c]);
+    }
+  }
+
+  if (sourceSamples[0].length < 32) {
+    return output;
+  }
+
+  const sourceStats = sourceSamples.map(robustStats);
+  const targetStats = targetSamples.map(robustStats);
+
+  for (let i = 0; i < mask.alpha.length; i += 1) {
+    const p = i * 4;
+    if (mask.alpha[i] <= 0 || source[p + 3] < 24) {
+      continue;
+    }
+    const strength = 0.92 * smoothstep(0.18, 1, mask.alpha[i]);
+    for (let c = 0; c < 3; c += 1) {
+      const ratio = Math.max(0.68, Math.min(1.42, targetStats[c].std / sourceStats[c].std));
+      const matched = (source[p + c] - sourceStats[c].mean) * ratio + targetStats[c].mean;
+      output.data[p + c] = clampByte(source[p + c] * (1 - strength) + matched * strength);
+    }
+    output.data[p + 3] = 255;
+  }
+  return output;
+}
+
+function robustStats(values) {
+  const sorted = [...values].sort((a, b) => a - b);
+  const start = Math.floor(sorted.length * 0.08);
+  const end = Math.max(start + 1, Math.ceil(sorted.length * 0.92));
+  let sum = 0;
+  let sumSq = 0;
+  let count = 0;
+  for (let i = start; i < end; i += 1) {
+    const value = sorted[i];
+    sum += value;
+    sumSq += value * value;
+    count += 1;
+  }
+  const mean = sum / count;
+  return {
+    mean,
+    std: Math.sqrt(Math.max(1, sumSq / count - mean * mean)),
+  };
+}
+
+function luminance(data, p) {
+  return data[p] * 0.2126 + data[p + 1] * 0.7152 + data[p + 2] * 0.0722;
+}
+
+function colorSpread(data, p) {
+  return Math.max(data[p], data[p + 1], data[p + 2]) - Math.min(data[p], data[p + 1], data[p + 2]);
+}
+
+function convexHull(points) {
+  const sorted = [...points].sort((a, b) => (a.x === b.x ? a.y - b.y : a.x - b.x));
+  if (sorted.length <= 2) {
+    return sorted;
+  }
+  const cross = (origin, a, b) => (a.x - origin.x) * (b.y - origin.y) - (a.y - origin.y) * (b.x - origin.x);
+  const lower = [];
+  for (const point of sorted) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], point) <= 0) {
+      lower.pop();
+    }
+    lower.push(point);
+  }
+  const upper = [];
+  for (let i = sorted.length - 1; i >= 0; i -= 1) {
+    const point = sorted[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], point) <= 0) {
+      upper.pop();
+    }
+    upper.push(point);
+  }
+  lower.pop();
+  upper.pop();
+  return lower.concat(upper);
+}
+
+function blurMask(mask, width, height, radius, passes) {
+  let current = new Float32Array(mask.length);
+  for (let i = 0; i < mask.length; i += 1) {
+    current[i] = mask[i] ? 1 : 0;
+  }
+
+  for (let pass = 0; pass < passes; pass += 1) {
+    current = boxBlurHorizontal(current, width, height, radius);
+    current = boxBlurVertical(current, width, height, radius);
+  }
+
+  for (let i = 0; i < current.length; i += 1) {
+    current[i] = Math.min(1, current[i] * 1.22);
+  }
+  return current;
+}
+
+function boxBlurHorizontal(input, width, height, radius) {
+  const output = new Float32Array(input.length);
+  const windowSize = radius * 2 + 1;
+  for (let y = 0; y < height; y += 1) {
+    let sum = 0;
+    for (let x = -radius; x <= radius; x += 1) {
+      sum += input[y * width + clampInt(x, 0, width - 1)];
+    }
+    for (let x = 0; x < width; x += 1) {
+      output[y * width + x] = sum / windowSize;
+      const removeX = clampInt(x - radius, 0, width - 1);
+      const addX = clampInt(x + radius + 1, 0, width - 1);
+      sum += input[y * width + addX] - input[y * width + removeX];
+    }
+  }
+  return output;
+}
+
+function boxBlurVertical(input, width, height, radius) {
+  const output = new Float32Array(input.length);
+  const windowSize = radius * 2 + 1;
+  for (let x = 0; x < width; x += 1) {
+    let sum = 0;
+    for (let y = -radius; y <= radius; y += 1) {
+      sum += input[clampInt(y, 0, height - 1) * width + x];
+    }
+    for (let y = 0; y < height; y += 1) {
+      output[y * width + x] = sum / windowSize;
+      const removeY = clampInt(y - radius, 0, height - 1);
+      const addY = clampInt(y + radius + 1, 0, height - 1);
+      sum += input[addY * width + x] - input[removeY * width + x];
+    }
+  }
+  return output;
 }
 
 function normalizeTransparentPixels(sourceImageData, targetImageData) {
@@ -624,4 +1142,8 @@ function smoothstep(edge0, edge1, value) {
 
 function clampByte(value) {
   return Math.max(0, Math.min(255, Math.round(value)));
+}
+
+function clampInt(value, min, max) {
+  return Math.max(min, Math.min(max, value));
 }
