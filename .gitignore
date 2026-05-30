@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+
+# macOS
+.DS_Store
+
+# 压缩包
+*.zip
+*.tar.gz
+
+# 临时文件
+*.tmp
